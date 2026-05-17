@@ -120,7 +120,7 @@ export default function FleetMap({ buses, alerts }) {
   const mountedRef   = useRef(false);   // true after first effect run
 
   useEffect(() => {
-    fetch('http://localhost:4000/api/routes')
+    fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:4000/api'}/routes`)
       .then(r => r.json())
       .then(setRoutes)
       .catch(() => {});
