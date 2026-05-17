@@ -18,8 +18,9 @@ import ONDCArrivals  from './pages/ONDCArrivals';
 import AlertCenter   from './pages/AlertCenter';
 import ShiftHandover from './pages/ShiftHandover';
 import DefectReports from './pages/DefectReports';
-import TripPlanner   from './pages/TripPlanner';
-import TCOAnalysis   from './pages/TCOAnalysis';
+import TripPlanner      from './pages/TripPlanner';
+import TCOAnalysis      from './pages/TCOAnalysis';
+import ChargingPlanner  from './pages/ChargingPlanner';
 
 const PAGES = {
   'fleet-map':      FleetMap,
@@ -34,8 +35,9 @@ const PAGES = {
   'fleet-alerts':   AlertCenter,
   'fleet-handover': ShiftHandover,
   'fleet-defects':  DefectReports,
-  'trip-planner':   TripPlanner,
-  'tco-analysis':   TCOAnalysis,
+  'trip-planner':      TripPlanner,
+  'tco-analysis':      TCOAnalysis,
+  'charging-planner':  ChargingPlanner,
 };
 
 // First page shown per role after login / after onboarding

@@ -31,8 +31,9 @@ const NAV = [
     id: 'analysis',
     roles: ['internal_analyst'],
     children: [
-      { label: 'Trip Planner',     id: 'trip-planner', icon: Route    },
-      { label: 'TCO Cost Analysis', id: 'tco-analysis', icon: BarChart2 },
+      { label: 'Trip Planner',       id: 'trip-planner',     icon: Route    },
+      { label: 'TCO Cost Analysis',  id: 'tco-analysis',     icon: BarChart2 },
+      { label: 'Charging Planner',   id: 'charging-planner', icon: Zap      },
     ],
   },
   {

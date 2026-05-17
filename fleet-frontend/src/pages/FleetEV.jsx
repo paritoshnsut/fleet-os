@@ -1,14 +1,8 @@
-import { useState, useRef } from 'react';
-import * as XLSX from 'xlsx';
 import {
   Zap, Thermometer, AlertTriangle,
-  Battery, Activity,
-  Sun, Moon, Sunset, UploadCloud, RotateCcw, FileSpreadsheet,
-  Pencil, Plus, Trash2, Copy,
+  Battery, Sun, Moon, Sunset,
 } from 'lucide-react';
 import { cn, formatINR } from '../lib/utils';
-
-const OPTIMIZER_URL = import.meta.env.VITE_OPTIMIZER_URL ?? 'http://localhost:8000';
 
 function SOCBar({ soc, charging = false }) {
   const color =
@@ -253,506 +247,8 @@ function EVBusCard({ bus, schedule }) {
   );
 }
 
-const HOUR_TARIFF = [
-  4.2, 4.0, 3.8, 3.8, 3.9, 4.2,
-  5.1, 6.8, 8.2, 9.5, 9.5, 8.0,
-  7.0, 6.5, 6.2, 6.8, 7.5, 8.8,
-  9.2, 9.0, 8.0, 6.5, 5.2, 4.5,
-];
-
-/* ── Charging Scheduler ─────────────────────────────────────────────────── */
-const CHARGER_KW = 60;
-const SLOT_MIN   = 30;
-const SLOTS_DAY  = 48;
-
-function hhmmToSlot(hhmm) {
-  if (!hhmm) return null;
-  const [h, m] = String(hhmm).split(':').map(Number);
-  return Math.floor((h * 60 + (m || 0)) / SLOT_MIN);
-}
-function slotToHHMM(slot) {
-  const totalMin = (slot % SLOTS_DAY) * SLOT_MIN;
-  return `${String(Math.floor(totalMin / 60)).padStart(2, '0')}:${String(totalMin % 60).padStart(2, '0')}`;
-}
-function slotTariff(slot) {
-  return HOUR_TARIFF[Math.floor((slot % SLOTS_DAY) / 2)];
-}
-function windowCost(startSlot, numSlots) {
-  let c = 0;
-  for (let s = 0; s < numSlots; s++) c += slotTariff(startSlot + s) * CHARGER_KW * (SLOT_MIN / 60);
-  return c;
-}
-
-function runScheduler(busList, numChargers) {
-  const TOTAL = SLOTS_DAY * 2; // two-day window handles overnight wrap
-  const occ   = Array.from({ length: numChargers }, () => new Array(TOTAL).fill(null));
-
-  const entries = busList.map(b => {
-    let outSlot = hhmmToSlot(b.outTime) ?? 40;
-    let inSlot  = hhmmToSlot(b.inTime)  ?? 12;
-    // overnight: bus returns at 20:30, must leave at 06:00 → inSlot in day 2
-    if (inSlot <= outSlot) inSlot += SLOTS_DAY;
-    const kwhNeeded = b.kwh ? Number(b.kwh) : 100;
-    const numSlots  = Math.ceil(kwhNeeded / (CHARGER_KW * (SLOT_MIN / 60)));
-    const soc       = b.soc ?? 60;
-    // priority: low SOC first, then tightest available window
-    const urgency   = (100 - soc) * 100 + Math.max(0, 48 - (inSlot - outSlot));
-    return { ...b, outSlot, inSlot, kwhNeeded, numSlots, soc, urgency };
-  }).sort((a, b) => b.urgency - a.urgency);
-
-  const scheduled = [], conflicts = [];
-  for (const bus of entries) {
-    const { outSlot, inSlot, numSlots } = bus;
-    let bestCost = Infinity, bestStart = -1, bestCharger = -1;
-
-    for (let start = outSlot; start <= inSlot - numSlots; start++) {
-      const cost = windowCost(start, numSlots);
-      if (cost >= bestCost) continue; // prune: only improve
-      for (let c = 0; c < numChargers; c++) {
-        let free = true;
-        for (let s = 0; s < numSlots; s++) {
-          if (occ[c][start + s]) { free = false; break; }
-        }
-        if (free) { bestCost = cost; bestStart = start; bestCharger = c; break; }
-      }
-    }
-
-    if (bestStart >= 0) {
-      for (let s = 0; s < numSlots; s++) occ[bestCharger][bestStart + s] = bus.busId;
-      const naiveCost = windowCost(outSlot, numSlots);
-      scheduled.push({
-        busId:       bus.busId,
-        charger:     `C-${String(bestCharger + 1).padStart(2, '0')}`,
-        arrives:     bus.outTime,
-        departs:     bus.inTime,
-        chargeStart: slotToHHMM(bestStart),
-        chargeEnd:   slotToHHMM(bestStart + numSlots),
-        delayed:     bestStart > outSlot,
-        delayMins:   (bestStart - outSlot) * SLOT_MIN,
-        kWh:         bus.kwhNeeded,
-        chargeHours: +(numSlots * SLOT_MIN / 60).toFixed(1),
-        cost:        Math.round(bestCost),
-        naiveCost:   Math.round(naiveCost),
-        savings:     Math.round(naiveCost - bestCost),
-        isUrgent:    bus.soc < 25,
-      });
-    } else {
-      conflicts.push({
-        busId:  bus.busId,
-        reason: (inSlot - outSlot) < numSlots
-          ? `Window too short — needs ${+(numSlots * SLOT_MIN / 60).toFixed(1)} h to charge ${bus.kwhNeeded} kWh`
-          : 'All chargers occupied during available window',
-      });
-    }
-  }
-
-  const totalCost      = scheduled.reduce((s, r) => s + r.cost, 0);
-  const totalNaiveCost = scheduled.reduce((s, r) => s + r.naiveCost, 0);
-  return {
-    scheduled,
-    conflicts,
-    totalCost,
-    totalNaiveCost,
-    totalSavings: totalNaiveCost - totalCost,
-    savingsPct:   totalNaiveCost > 0
-      ? Math.round((totalNaiveCost - totalCost) / totalNaiveCost * 100) : 0,
-  };
-}
-function findMinChargers(busList) {
-  if (!busList.length) return 1;
-  let lo = 1, hi = busList.length, result = busList.length;
-  while (lo <= hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    if (runScheduler(busList, mid).conflicts.length === 0) { result = mid; hi = mid - 1; }
-    else lo = mid + 1;
-  }
-  return result;
-}
-/* ── Greedy Vehicle Scheduling Problem (VSP) ────────────────────────────── */
-// Each row in the Excel is a TRIP (route + departure + return times), not a bus.
-// VSP packs multiple trips into each physical bus (if bus is back before next trip
-// departs it can be reused), minimising total bus count — same logic as Trip Planner.
-
-function hhmmToMin(hhmm) {
-  if (!hhmm) return null;
-  const [h, m] = String(hhmm).split(':').map(Number);
-  return h * 60 + (m || 0);
-}
-function minToHHMM(min) {
-  const t = ((min % 1440) + 1440) % 1440;
-  return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
-}
-
-function greedyVSP(rawTrips) {
-  // rawTrips: [{ tripLabel, departMin, returnMin, kwh }]
-  // departMin = when bus LEAVES depot (In time from Excel)
-  // returnMin = when bus RETURNS to depot (Out time from Excel)
-  if (!rawTrips.length) return [];
-
-  const sorted = [...rawTrips].sort((a, b) => a.departMin - b.departMin);
-  const buses  = []; // { trips[], lastReturnMin }
-
-  for (const trip of sorted) {
-    // Best-fit: latest-finishing bus that is still available before this trip departs
-    let bestIdx = -1, bestRet = -Infinity;
-    for (let i = 0; i < buses.length; i++) {
-      const ret = buses[i].lastReturnMin;
-      if (ret <= trip.departMin && ret > bestRet) { bestRet = ret; bestIdx = i; }
-    }
-    if (bestIdx === -1) { buses.push({ trips: [], lastReturnMin: 0 }); bestIdx = buses.length - 1; }
-    buses[bestIdx].trips.push(trip);
-    buses[bestIdx].lastReturnMin = trip.returnMin;
-  }
-
-  return buses.map((bus, i) => {
-    const departs = bus.trips.map(t => t.departMin);
-    const returns = bus.trips.map(t => t.returnMin);
-    const kwhSum  = bus.trips.reduce((s, t) => s + (t.kwh || 0), 0);
-    return {
-      busId:    `Bus-${String(i + 1).padStart(3, '0')}`,
-      outTime:  minToHHMM(Math.max(...returns)), // last return  = when charging CAN start
-      inTime:   minToHHMM(Math.min(...departs)), // first depart = when charging MUST end
-      kwh:      kwhSum > 0 ? Math.round(kwhSum / bus.trips.length * bus.trips.length) : null,
-      soc:      60,
-      numTrips: bus.trips.length,
-      routes:   bus.trips.map(t => t.tripLabel),
-    };
-  });
-}
-/* ────────────────────────────────────────────────────────────────────────── */
-
-
-
-function normalizeKey(s) {
-  // Strip everything except letters and digits so "Sl #", "Bus ID.", "In time" all compare cleanly
-  return String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
-}
-
-
-function toHHMM(raw) {
-  if (raw == null) return null;
-  if (typeof raw === 'number') {
-    // Excel serial fraction (time-of-day)
-    const totalMin = Math.round(raw * 1440);
-    const h = Math.floor(totalMin / 60) % 24;
-    const m = totalMin % 60;
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-  }
-  const s = String(raw).trim();
-  if (/^\d{1,2}:\d{2}/.test(s)) return s.slice(0, 5);
-  if (/^\d{3,4}$/.test(s)) {
-    const h = s.length === 3 ? s[0] : s.slice(0, 2);
-    const m = s.slice(-2);
-    return `${h.padStart(2, '0')}:${m}`;
-  }
-  return s;
-}
-
-// Column-name candidates (all pre-normalised — no spaces, lowercase, alphanumeric only)
-// Split into three tiers so we can build composite keys (Route + Serial) when needed
-const PURE_BUS_CANDIDATES = ['busid','busno','busnumber','busnos','vehicleno','vehicleid','vehicle','busname'];
-const ROUTE_CANDIDATES    = ['routename','route','routeno','routenumber','routeid'];
-const SERIAL_CANDIDATES   = ['sl','slno','sno','srno','serialno','serialnumber','no'];
-const BUS_CANDIDATES      = [...PURE_BUS_CANDIDATES, ...ROUTE_CANDIDATES, ...SERIAL_CANDIDATES];
-
-const START_CANDIDATES = [
-  'chargestarttime','chargestart','starttime','start',
-  'outtime','out','releasetime','returntime','arrivaltime','arrival','plugintime','plugin','from',
-];
-const END_CANDIDATES = [
-  'chargeendtime','chargeend','endtime','end',
-  'intime','in','reportingtime','departuretime','departure','plugouttime','plugout','to',
-];
-const KWH_CANDIDATES  = ['kwh','energykwh','energy'];
-const COST_CANDIDATES = ['costinr','cost','price','amount','fare'];
-
-function findColIdx(headers, candidates) {
-  return headers.findIndex(h => candidates.includes(normalizeKey(h)));
-}
-
-function parseChargeExcel(file, onDone, onError) {
-  const reader = new FileReader();
-  reader.onload = e => {
-    try {
-      const wb = XLSX.read(e.target.result, { type: 'array' });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
-      if (!raw.length) { onError('No data found in the sheet.'); return; }
-
-      // Returns true if a row looks like a column-header row (not a data row)
-      function looksLikeHeader(row) {
-        const cells = row.map(c => String(c ?? '').trim());
-        const normed = cells.map(normalizeKey);
-        const hasTime = normed.some(n =>
-          START_CANDIDATES.includes(n) || END_CANDIDATES.includes(n) ||
-          n.includes('intime') || n.includes('outtime') || n === 'time'
-        );
-        const hasBus = normed.some(n =>
-          BUS_CANDIDATES.includes(n) || n.includes('bus') || n.includes('vehicle') || n === 'sl'
-        );
-        return (hasTime || hasBus) && cells.filter(Boolean).length >= 2;
-      }
-
-      // Extract column indices from a header row
-      function colsFrom(row) {
-        const h = row.map(c => String(c ?? '').trim());
-        return {
-          idxBus:    findColIdx(h, PURE_BUS_CANDIDATES), // explicit bus registration
-          idxRoute:  findColIdx(h, ROUTE_CANDIDATES),    // route name
-          idxSerial: findColIdx(h, SERIAL_CANDIDATES),   // serial / sl number
-          idxStart:  findColIdx(h, START_CANDIDATES),
-          idxEnd:    findColIdx(h, END_CANDIDATES),
-          idxKwh:    findColIdx(h, KWH_CANDIDATES),
-          idxCost:   findColIdx(h, COST_CANDIDATES),
-        };
-      }
-
-      // Find first header row in first 15 rows
-      let headerRowIdx = -1;
-      for (let i = 0; i < Math.min(raw.length, 15); i++) {
-        if (looksLikeHeader(raw[i])) { headerRowIdx = i; break; }
-      }
-      // Fallback: first row with ≥3 non-empty cells
-      if (headerRowIdx === -1) {
-        for (let i = 0; i < Math.min(raw.length, 15); i++) {
-          if (raw[i].filter(c => c != null && String(c).trim() !== '').length >= 3) {
-            headerRowIdx = i; break;
-          }
-        }
-      }
-      if (headerRowIdx === -1) { onError('Could not find a header row in the sheet.'); return; }
-
-      let cols = colsFrom(raw[headerRowIdx]);
-
-      if (cols.idxStart === -1 || cols.idxEnd === -1) {
-        const found = raw[headerRowIdx].filter(Boolean).join(', ');
-        onError(
-          `Could not find required columns (Start Time / Out Time, End Time / In Time).\n` +
-          `Headers detected on row ${headerRowIdx + 1}: ${found || '(none)'}\n` +
-          `Expected names like: Bus No / Bus ID · Out Time / In Time`
-        );
-        return;
-      }
-
-      const busByName = {};
-
-      for (let i = headerRowIdx + 1; i < raw.length; i++) {
-        const row = raw[i];
-        if (!row || row.every(c => c == null || String(c).trim() === '')) continue;
-
-        // Re-map columns when a new section header is detected mid-sheet
-        // (common in multi-route Excel files where each route has its own header)
-        if (looksLikeHeader(row)) {
-          const newCols = colsFrom(row);
-          if (newCols.idxStart !== -1 && newCols.idxEnd !== -1) cols = newCols;
-          continue;
-        }
-
-        // Build a meaningful bus key:
-        //   1. Explicit bus registration number (busid, vehicleno, …)  → use as-is
-        //   2. Route name + serial number                               → "Adibatala #77"
-        //   3. Route name alone or serial alone                         → use whichever exists
-        const busIdRaw = cols.idxBus    >= 0 ? String(row[cols.idxBus]    ?? '').trim() : '';
-        const route    = cols.idxRoute  >= 0 ? String(row[cols.idxRoute]  ?? '').trim() : '';
-        const serial   = cols.idxSerial >= 0 ? String(row[cols.idxSerial] ?? '').trim() : '';
-        const busId    = busIdRaw
-          || (route && serial ? `${route} #${serial}` : (route || serial));
-        if (!busId) continue;
-
-        const start = toHHMM(row[cols.idxStart]);
-        const end   = toHHMM(row[cols.idxEnd]);
-        if (!start || !end) continue;
-
-        if (!busByName[busId]) busByName[busId] = [];
-        busByName[busId].push({
-          start,
-          end,
-          kwh:  cols.idxKwh  >= 0 ? Number(row[cols.idxKwh])  || null : null,
-          cost: cols.idxCost >= 0 ? Number(row[cols.idxCost]) || null : null,
-        });
-      }
-
-      const buses = Object.entries(busByName).map(([busId, chargeEvents]) => ({ busId, chargeEvents }));
-      if (!buses.length) { onError('No valid charge rows found after the header row.'); return; }
-
-      onDone({ fileName: file.name, buses, loadedAt: new Date().toISOString() });
-    } catch (err) {
-      onError(err.message);
-    }
-  };
-  reader.readAsArrayBuffer(file);
-}
-
-let _uid = 0;
-const makeId = () => `r${++_uid}-${Date.now()}`;
-
-const DEMO_ROWS = [
-  { id: 'd1', busId: 'MH12-AB-0001', outTime: '20:30', inTime: '06:00', kwh: '85', copyCount: 1 },
-  { id: 'd2', busId: 'MH12-CD-0002', outTime: '21:00', inTime: '05:45', kwh: '90', copyCount: 1 },
-  { id: 'd3', busId: 'MH12-EF-0003', outTime: '19:45', inTime: '06:15', kwh: '',   copyCount: 1 },
-];
-
 export default function FleetEV({ buses }) {
   const evBuses = buses.filter(b => b.fuelType === 'Electric');
-
-  const [chargePlan,   setChargePlan]   = useState(null);
-  const [parseError,   setParseError]   = useState('');
-  const [dragging,     setDragging]     = useState(false);
-  const [inputMode,    setInputMode]    = useState('excel');   // 'excel' | 'manual'
-  const [manualRows,      setManualRows]      = useState(DEMO_ROWS);
-  const [isDemoMode,      setIsDemoMode]      = useState(true);
-  const [optimizerLoading, setOptimizerLoading] = useState(false);
-  const [usedFallback,    setUsedFallback]    = useState(false);
-  const fileRef = useRef(null);
-
-  function scheduleAndStore(busList, meta) {
-    const minChargers = findMinChargers(busList);
-    const result      = runScheduler(busList, minChargers);
-    const busDetails  = Object.fromEntries(
-      busList.map(b => [b.busId, { numTrips: b.numTrips ?? 1, routes: b.routes ?? [] }])
-    );
-    setChargePlan({ ...meta, minChargers, busDetails, ...result });
-  }
-
-  // Convert a backend bus object (from /optimize greedy) into a charging-window entry
-  function busFromBackendLeg(bus) {
-    const endMins   = bus.legs.map(l => l.end_min);
-    const startMins = bus.legs.map(l => l.start_min);
-    const lastEnd   = Math.max(...endMins);
-    const firstStart = Math.min(...startMins);
-    const toHM = m => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-    return {
-      busId:    `Bus-${String(bus.bus_id).padStart(3, '0')}`,
-      outTime:  toHM(lastEnd),    // last trip ends = charging can start
-      inTime:   toHM(firstStart), // first trip starts = charging must end
-      kwh:      null,
-      soc:      60,
-      numTrips: bus.leg_count,
-      routes:   bus.legs.map(l => l.route_name),
-    };
-  }
-
-  async function handleFile(f) {
-    if (!f) return;
-    setParseError('');
-    setUsedFallback(false);
-
-    // ── Try the optimizer backend first (same as Trip Planner) ─────────────
-    // It accounts for seat-class constraints and gives the correct bus count.
-    setOptimizerLoading(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', f);
-      fd.append('benchmark_buses', 999); // we only care about bus assignments, not savings vs benchmark
-      const res = await fetch(`${OPTIMIZER_URL}/optimize`, { method: 'POST', body: fd });
-      if (!res.ok) throw new Error((await res.json()).detail ?? 'Optimizer error');
-      const data = await res.json();
-
-      // Use the greedy result — fastest and already correct for scheduling purposes
-      const busList = data.greedy.buses.map(busFromBackendLeg);
-      setOptimizerLoading(false);
-      scheduleAndStore(busList, {
-        fileName:   f.name,
-        loadedAt:   new Date().toISOString(),
-        source:     'excel',
-        totalTrips: data.summary.total_trips,
-        algorithm:  'greedy (backend)',
-      });
-      return;
-    } catch {
-      // Backend unavailable or not a trip-planning Excel — fall through to client-side VSP
-      setUsedFallback(true);
-    }
-    setOptimizerLoading(false);
-
-    // ── Fallback: client-side greedy VSP (no seat-class constraints) ────────
-    parseChargeExcel(f, parsed => {
-      const rawTrips = parsed.buses.flatMap(b =>
-        b.chargeEvents.map((ev, i) => ({
-          tripLabel:  b.chargeEvents.length > 1 ? `${b.busId} (trip ${i + 1})` : b.busId,
-          departMin:  hhmmToMin(ev.end),
-          returnMin:  hhmmToMin(ev.start),
-          kwh:        ev.kwh,
-        }))
-      );
-      if (!rawTrips.length) { setParseError('No valid trips found in the sheet.'); return; }
-      const busList = greedyVSP(rawTrips);
-      scheduleAndStore(busList, {
-        fileName:   parsed.fileName,
-        loadedAt:   parsed.loadedAt,
-        source:     'excel',
-        totalTrips: rawTrips.length,
-        algorithm:  'greedy (client-side, no seat constraints)',
-      });
-    }, setParseError);
-  }
-
-  function handleDrop(e) {
-    e.preventDefault();
-    setDragging(false);
-    handleFile(e.dataTransfer.files[0]);
-  }
-
-  function switchMode(m) {
-    setInputMode(m);
-    setParseError('');
-  }
-
-  function updateRow(id, field, value) {
-    setIsDemoMode(false);
-    setManualRows(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
-  }
-
-  function addRow() {
-    setIsDemoMode(false);
-    setManualRows(prev => {
-      const last = prev[prev.length - 1];
-      return [...prev, {
-        id: makeId(), busId: '',
-        outTime: last?.outTime || '20:00',
-        inTime:  last?.inTime  || '06:00',
-        kwh: '', copyCount: 1,
-      }];
-    });
-  }
-
-  function deleteRow(id) {
-    setManualRows(prev => {
-      const next = prev.filter(r => r.id !== id);
-      return next.length ? next : [{ id: makeId(), busId: '', outTime: '20:00', inTime: '06:00', kwh: '', copyCount: 1 }];
-    });
-  }
-
-  function copyRow(id) {
-    setManualRows(prev => {
-      const idx = prev.findIndex(r => r.id === id);
-      if (idx === -1) return prev;
-      const src = prev[idx];
-      const n = Math.max(1, Math.min(200, parseInt(src.copyCount) || 1));
-      const copies = Array.from({ length: n }, (_, i) => ({ ...src, id: `${makeId()}-${i}`, copyCount: 1 }));
-      return [...prev.slice(0, idx + 1), ...copies, ...prev.slice(idx + 1)];
-    });
-  }
-
-  function clearToBlank() {
-    setIsDemoMode(false);
-    setManualRows([{ id: makeId(), busId: '', outTime: '20:00', inTime: '06:00', kwh: '', copyCount: 1 }]);
-  }
-
-  function loadManualSchedule() {
-    setParseError('');
-    const busList = [];
-    manualRows.forEach(row => {
-      const busId = row.busId.trim();
-      if (!busId || !row.outTime || !row.inTime) return;
-      busList.push({ busId, outTime: row.outTime, inTime: row.inTime, kwh: row.kwh ? Number(row.kwh) : null, soc: 60, numTrips: 1, routes: [] });
-    });
-    if (!busList.length) {
-      setParseError('Fill at least one row with Bus ID, Out Time and In Time.');
-      return;
-    }
-    scheduleAndStore(busList, { fileName: 'Manual Entry', loadedAt: new Date().toISOString(), source: 'manual', totalTrips: busList.length });
-  }
 
   const schedules = {
     'MH12-AB-1234': { status: 'charging', kw: 60, eta: '2h 15m',   scheduledAt: null,    estCost: 420 },
@@ -887,23 +383,361 @@ export default function FleetEV({ buses }) {
         </div>
       </div>
 
-      {/* ── Optimizer loading overlay ── */}
-      {optimizerLoading && (
-        <div className="bg-white border border-slate-200 rounded-xl p-8 flex flex-col items-center gap-4 shadow-sm">
-          <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center">
-            <Zap size={22} className="text-white" />
+
+    </div>
+  );
+}
+
+function ThermalBadge({ temp }) {
+  const hot = temp > 35;
+  return (
+    <span className={cn(
+      'flex items-center gap-1 px-2 py-0.5 rounded-full border text-xs',
+      hot
+        ? 'bg-red-50 border-red-200 text-red-600'
+        : 'bg-green-50 border-green-200 text-green-600'
+    )}>
+      <Thermometer size={10} />
+      {temp}°C {hot ? '— Too Hot' : '— OK'}
+    </span>
+  );
+}
+
+function ChargingSlot({ slot }) {
+  const statusConfig = {
+    charging: { color: 'text-blue-600',   bg: 'bg-blue-50 border-blue-200',   label: 'Charging',   dot: 'bg-blue-500'   },
+    queued:   { color: 'text-amber-600',  bg: 'bg-amber-50 border-amber-200', label: 'Queued',     dot: 'bg-amber-500'  },
+    complete: { color: 'text-green-600',  bg: 'bg-green-50 border-green-200', label: 'Complete',   dot: 'bg-green-500'  },
+    idle:     { color: 'text-slate-400',  bg: 'bg-slate-50 border-slate-200', label: 'Available',  dot: 'bg-slate-300'  },
+  };
+  const cfg = statusConfig[slot.status] || statusConfig.idle;
+
+  return (
+    <div className={cn('border rounded-xl p-4', cfg.bg)}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <div className={cn('w-2 h-2 rounded-full', cfg.dot,
+            slot.status === 'charging' && 'animate-pulse')} />
+          <p className="text-slate-800 font-semibold text-sm">Charger {slot.id}</p>
+        </div>
+        <span className={cn('text-xs font-medium', cfg.color)}>{cfg.label}</span>
+      </div>
+
+      {slot.busId ? (
+        <>
+          <p className="text-slate-500 text-xs mb-3">{slot.busId}</p>
+          <div className="space-y-2">
+            <div className="flex justify-between text-xs">
+              <span className="text-slate-400">Power</span>
+              <span className="text-slate-800 font-medium">{slot.kw} kW</span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-slate-400">SOC now</span>
+              <span className="text-slate-800 font-medium">{Math.round(slot.soc)}%</span>
+            </div>
+            {slot.eta && (
+              <div className="flex justify-between text-xs">
+                <span className="text-slate-400">Full charge ETA</span>
+                <span className={cn('font-medium', cfg.color)}>{slot.eta}</span>
+              </div>
+            )}
+            {slot.cost && (
+              <div className="flex justify-between text-xs">
+                <span className="text-slate-400">Session cost</span>
+                <span className="text-slate-800 font-medium">{formatINR(slot.cost)}</span>
+              </div>
+            )}
           </div>
-          <div className="text-center">
-            <p className="text-slate-800 font-semibold">Running trip scheduler…</p>
-            <p className="text-slate-400 text-xs mt-1">Calling optimizer · accounting for seat class constraints</p>
+        </>
+      ) : (
+        <div className="flex items-center justify-center h-16 text-slate-400 text-xs">
+          No bus connected
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DemandChart() {
+  const hours  = Array.from({ length: 24 }, (_, i) => i);
+  const tariff = [
+    4.2, 4.0, 3.8, 3.8, 3.9, 4.2,
+    5.1, 6.8, 8.2, 9.5, 9.5, 8.0,
+    7.0, 6.5, 6.2, 6.8, 7.5, 8.8,
+    9.2, 9.0, 8.0, 6.5, 5.2, 4.5,
+  ];
+  const max     = Math.max(...tariff);
+  const now     = new Date().getHours();
+  const optimal = tariff.map(t => t < 5.5);
+
+  return (
+    <div>
+      <div className="flex items-end gap-0.5 h-20 mb-1">
+        {tariff.map((t, i) => {
+          const heightPct = (t / max) * 100;
+          const isNow     = i === now;
+          const isOpt     = optimal[i];
+          return (
+            <div
+              key={i}
+              className="flex-1 rounded-t-sm transition-all relative group"
+              style={{
+                height: `${heightPct}%`,
+                backgroundColor: isNow
+                  ? '#3b82f6'
+                  : isOpt
+                  ? '#22c55e60'
+                  : '#ef444440',
+                border: isNow ? '1px solid #3b82f6' : 'none',
+              }}
+            >
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1
+                bg-slate-800 text-white text-[9px] px-1.5 py-0.5 rounded whitespace-nowrap
+                opacity-0 group-hover:opacity-100 pointer-events-none z-10">
+                {i}:00 · ₹{t}/kWh
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex justify-between text-slate-400 text-[9px]">
+        {[0, 6, 12, 18, 23].map(h => (
+          <span key={h}>{h}:00</span>
+        ))}
+      </div>
+      <div className="flex items-center gap-4 mt-2">
+        <div className="flex items-center gap-1.5 text-xs text-slate-500">
+          <div className="w-3 h-3 rounded-sm bg-green-500/40" /> Optimal window
+        </div>
+        <div className="flex items-center gap-1.5 text-xs text-slate-500">
+          <div className="w-3 h-3 rounded-sm bg-red-500/40" /> Peak tariff
+        </div>
+        <div className="flex items-center gap-1.5 text-xs text-slate-500">
+          <div className="w-3 h-3 rounded-sm bg-blue-500" /> Now
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EVBusCard({ bus, schedule }) {
+  const degradation = Math.max(78, 100 - (Math.random() * 15 + 2)).toFixed(1);
+  const ambientTemp = 28 + Math.floor(Math.random() * 10);
+  const tooHot      = ambientTemp > 35;
+
+  return (
+    <div className={cn(
+      'bg-white border rounded-xl p-5 transition-all shadow-sm',
+      bus.soc < 25
+        ? 'border-red-300'
+        : tooHot
+        ? 'border-orange-300'
+        : 'border-slate-200'
+    )}>
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <p className="text-slate-800 font-semibold text-sm">{bus.busId}</p>
+          <p className="text-slate-400 text-xs mt-0.5">{bus.routeNo} · {bus.routeName}</p>
+        </div>
+        <ThermalBadge temp={ambientTemp} />
+      </div>
+
+      <div className="mb-4">
+        <SOCBar soc={bus.soc} charging={schedule?.status === 'charging'} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 mb-4">
+        {[
+          { label: 'Battery SoH',  value: `${degradation}%`,                          color: parseFloat(degradation) > 90 ? 'text-green-600' : 'text-amber-600' },
+          { label: 'Km today',     value: `${bus.kmToday} km`,                         color: 'text-slate-800'  },
+          { label: 'Energy used',  value: `${(bus.kmToday * 1.4).toFixed(0)} kWh`,    color: 'text-purple-600' },
+          { label: 'Range left',   value: `${Math.round(bus.soc * 2.8)} km`,           color: bus.soc < 25 ? 'text-red-600' : 'text-slate-800' },
+        ].map(({ label, value, color }) => (
+          <div key={label} className="bg-slate-50 rounded-lg px-3 py-2">
+            <p className="text-slate-400 text-xs mb-0.5">{label}</p>
+            <p className={cn('font-semibold text-sm', color)}>{value}</p>
           </div>
-          <div className="w-48 h-1 bg-slate-100 rounded-full overflow-hidden">
-            <div className="h-full bg-blue-500 rounded-full animate-pulse" style={{ width: '60%' }} />
+        ))}
+      </div>
+
+      {schedule ? (
+        <div className={cn(
+          'rounded-lg px-3 py-2.5 border text-xs',
+          schedule.status === 'charging'
+            ? 'bg-blue-50 border-blue-200 text-blue-700'
+            : schedule.status === 'queued'
+            ? 'bg-amber-50 border-amber-200 text-amber-700'
+            : 'bg-green-50 border-green-200 text-green-700'
+        )}>
+          <div className="flex items-center gap-1.5 font-medium mb-0.5">
+            <Zap size={11} />
+            {schedule.status === 'charging' ? 'Currently charging'
+             : schedule.status === 'queued'  ? `Scheduled: ${schedule.scheduledAt}`
+             : 'Charge complete'}
+          </div>
+          <p className="text-slate-500">
+            {schedule.status === 'charging'
+              ? `${schedule.kw}kW AC · Full charge in ${schedule.eta}`
+              : schedule.status === 'queued'
+              ? `Off-peak slot · Est. cost ${formatINR(schedule.estCost)}`
+              : `Ready for duty · SOC at ${Math.round(bus.soc)}%`
+            }
+          </p>
+        </div>
+      ) : (
+        <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-xs text-slate-400">
+          Not scheduled — assign to charger
+        </div>
+      )}
+
+      {tooHot && (
+        <div className="mt-2 bg-orange-50 border border-orange-200
+          rounded-lg px-3 py-2 text-orange-700 text-xs flex items-center gap-2">
+          <AlertTriangle size={11} />
+          Ambient {ambientTemp}°C — delay charging until temperature drops below 35°C
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function FleetEV({ buses }) {
+  const evBuses = buses.filter(b => b.fuelType === 'Electric');
+
+  const schedules = {
+    'MH12-AB-1234': { status: 'charging', kw: 60, eta: '2h 15m',   scheduledAt: null,    estCost: 420 },
+    'MH12-CD-5678': { status: 'queued',   kw: 60, eta: '3h 00m',   scheduledAt: '23:00', estCost: 380 },
+    'MH12-EF-9012': { status: 'complete', kw: 0,  eta: null,        scheduledAt: null,    estCost: 510 },
+    'MH12-GH-3456': { status: 'queued',   kw: 60, eta: '2h 45m',   scheduledAt: '01:00', estCost: 360 },
+    'MH12-IJ-7890': { status: 'queued',   kw: 60, eta: '1h 50m',   scheduledAt: '00:00', estCost: 290 },
+  };
+
+  const chargerSlots = [
+    { id: 'C-01', busId: 'MH12-AB-1234', status: 'charging', kw: 60, soc: evBuses[0]?.soc || 45, eta: '2h 15m', cost: 420 },
+    { id: 'C-02', busId: 'MH12-EF-9012', status: 'complete', kw: 0,  soc: evBuses[2]?.soc || 98, eta: null,     cost: 510 },
+    { id: 'C-03', busId: null,            status: 'idle',     kw: 0,  soc: null,                   eta: null,     cost: null },
+    { id: 'C-04', busId: null,            status: 'idle',     kw: 0,  soc: null,                   eta: null,     cost: null },
+  ];
+
+  const avgSOC       = evBuses.length
+    ? Math.round(evBuses.reduce((s, b) => s + (b.soc || 0), 0) / evBuses.length) : 0;
+  const lowSOC       = evBuses.filter(b => (b.soc || 0) < 25).length;
+  const charging     = Object.values(schedules).filter(s => s.status === 'charging').length;
+  const peakSaving   = charging * 60 * 1.8;
+  const now          = new Date().getHours();
+  const isOffPeak    = now >= 22 || now <= 6;
+  const currentTariff = isOffPeak ? '₹4.0/kWh' : now >= 9 && now <= 11 ? '₹9.5/kWh' : '₹7.0/kWh';
+
+  return (
+    <div className="flex flex-col gap-5">
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {[
+          { label: 'EV Fleet',           value: `${evBuses.length} buses`, sub: 'electric in depot',  color: 'text-blue-600'   },
+          { label: 'Avg SOC',            value: `${avgSOC}%`,              sub: 'fleet average',      color: avgSOC < 30 ? 'text-red-600' : 'text-green-600' },
+          { label: 'Low Battery',        value: lowSOC,                    sub: 'below 25% SOC',      color: lowSOC > 0 ? 'text-red-600' : 'text-green-600' },
+          { label: 'Currently Charging', value: charging,                  sub: 'chargers active',    color: 'text-blue-600'   },
+          { label: 'Tariff Now',         value: currentTariff,             sub: isOffPeak ? 'Off-peak ✓' : 'Peak hours', color: isOffPeak ? 'text-green-600' : 'text-orange-600' },
+        ].map(s => (
+          <div key={s.label} className="bg-white border border-slate-200 rounded-xl px-4 py-3 shadow-sm">
+            <p className="text-slate-500 text-xs mb-1">{s.label}</p>
+            <p className={cn('text-xl font-bold', s.color)}>{s.value}</p>
+            <p className="text-slate-400 text-xs mt-0.5">{s.sub}</p>
+          </div>
+        ))}
+      </div>
+
+      {lowSOC > 0 && (
+        <div className="flex items-center gap-3 bg-red-50 border border-red-200
+          rounded-xl px-5 py-3">
+          <Battery size={18} className="text-red-500 flex-shrink-0" />
+          <div>
+            <p className="text-red-700 font-semibold text-sm">
+              {lowSOC} bus{lowSOC > 1 ? 'es' : ''} below 25% SOC
+            </p>
+            <p className="text-red-500 text-xs mt-0.5">
+              Assign to available charger immediately to ensure duty readiness tomorrow.
+            </p>
           </div>
         </div>
       )}
 
-      {/* ── Charging Schedule ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+
+        <div className="lg:col-span-2 flex flex-col gap-4">
+          <h3 className="text-slate-500 text-xs font-medium uppercase tracking-wide">
+            EV Fleet Status
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {evBuses.map(bus => (
+              <EVBusCard
+                key={bus.busId}
+                bus={bus}
+                schedule={schedules[bus.busId]}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-4">
+
+          <div className="bg-gradient-to-br from-blue-50 to-purple-50
+            border border-blue-200 rounded-xl p-4">
+            <p className="text-blue-700 font-semibold text-sm flex items-center gap-2 mb-1">
+              <Zap size={14} /> Smart Charging Active
+            </p>
+            <p className="text-slate-500 text-xs mb-3">
+              3 buses scheduled for off-peak charging (22:00–06:00) to avoid
+              peak demand surcharge.
+            </p>
+            <div className="flex items-center justify-between bg-green-50
+              border border-green-200 rounded-lg px-3 py-2">
+              <span className="text-green-700 text-xs font-medium">Est. savings today</span>
+              <span className="text-green-700 font-bold text-sm">
+                {formatINR(peakSaving + 840)}
+              </span>
+            </div>
+            <p className="text-slate-400 text-xs mt-2">
+              vs charging all buses during peak hours (₹9.5/kWh)
+            </p>
+          </div>
+
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+            <p className="text-slate-500 text-xs font-medium uppercase tracking-wide mb-3">
+              24h Electricity Tariff
+            </p>
+            <DemandChart />
+            <div className="mt-3 space-y-1.5">
+              {[
+                { icon: Moon,   label: 'Off-peak (22:00–06:00)',      value: '₹3.8–4.2/kWh', color: 'text-green-600'  },
+                { icon: Sun,    label: 'Peak (09:00–11:00)',           value: '₹9.5/kWh',     color: 'text-red-600'    },
+                { icon: Sunset, label: 'Evening peak (18:00–21:00)',   value: '₹8.8–9.2/kWh', color: 'text-orange-600' },
+              ].map(({ icon: Icon, label, value, color }) => (
+                <div key={label} className="flex items-center justify-between text-xs">
+                  <span className="flex items-center gap-1.5 text-slate-500">
+                    <Icon size={11} className={color} /> {label}
+                  </span>
+                  <span className={cn('font-medium', color)}>{value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+            <p className="text-slate-500 text-xs font-medium uppercase tracking-wide mb-3">
+              Depot Chargers — 4 Slots
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {chargerSlots.map(slot => (
+                <ChargingSlot key={slot.id} slot={slot} />
+              ))}
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      {/* ── Charging Schedule moved to Internal Analysis → Charging Planner ── */}
       {chargePlan ? (
         /* ── Optimized results ── */
         <div className="flex flex-col gap-4">
