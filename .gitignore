@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+
+# Environment files (NEVER commit secrets)
+.env
+.env.local
+.env.production
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Python packaging
+*.egg
+.eggs/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Excel / data files (large, not code)
+*.xlsx
+*.xls
