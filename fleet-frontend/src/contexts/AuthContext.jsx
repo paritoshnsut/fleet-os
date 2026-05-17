@@ -65,7 +65,7 @@ export function AuthProvider({ children }) {
       password,
       options: {
         data: { full_name: fullName, role },
-        emailRedirectTo: window.location.origin,
+        emailRedirectTo: import.meta.env.VITE_APP_URL || window.location.origin,
       },
     });
     return { error };
