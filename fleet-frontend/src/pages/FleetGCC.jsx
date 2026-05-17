@@ -125,7 +125,7 @@ function GCCRow({ row, isExpanded, onToggle }) {
               Contract Details
             </p>
             {[
-              { label: 'GCC Rate',          value: '₹56.5 / km'               },
+              { label: 'GCC Rate',          value: '₹80 / km'                 },
               { label: 'Contracted KM/day', value: `${row.contractedKm} km`   },
               { label: 'Actual KM today',   value: `${row.kmToday} km`        },
               { label: 'KM shortfall',      value: `${Math.max(0, row.contractedKm - row.kmToday)} km` },

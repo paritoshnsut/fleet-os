@@ -90,7 +90,7 @@ app.get('/api/gcc', (req, res) => {
       kmToday:       bus.kmToday,
       contractedKm,
       compliancePct: Math.round(compliance * 100),
-      revenueToday:  Math.round(bus.kmToday * 56.5),    // ₹56.5/km GCC rate
+      revenueToday:  Math.round(bus.kmToday * 80),
       psmStatus:     lastPaymentDays > 30 ? "OVERDUE" : "OK",
       lastPaymentDays,
       fuelType:      bus.fuelType,
