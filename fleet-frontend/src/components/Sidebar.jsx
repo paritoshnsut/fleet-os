@@ -3,7 +3,7 @@ import { cn } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
 import {
   Bus, Shield, MapPin, LayoutDashboard,
-  Activity, TrendingUp, FileText, Zap,
+  Activity, FileText, Zap,
   ChevronLeft, ChevronRight, AlertTriangle, ClipboardList,
   LogOut, Users, Route, Settings2, BarChart2,
 } from 'lucide-react';
@@ -35,16 +35,6 @@ const NAV = [
     children: [
       { label: 'School Dashboard', id: 'safe-school',  icon: LayoutDashboard, roles: ['school_staff'] },
       { label: 'Parent View',      id: 'safe-parent',  icon: Users,           roles: ['parent']       },
-    ],
-  },
-  {
-    label: 'ONDC Transport',
-    icon: MapPin,
-    id: 'ondc',
-    roles: ['passenger'],
-    children: [
-      { label: 'Journey Planner', id: 'ondc-journey',  icon: TrendingUp },
-      { label: 'Live Arrivals',   id: 'ondc-arrivals', icon: Activity   },
     ],
   },
 ];

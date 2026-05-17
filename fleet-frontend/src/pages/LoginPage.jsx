@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Bus, Shield, MapPin, Users, Eye, EyeOff, Loader2, LayoutDashboard } from 'lucide-react';
+import { Bus, Shield, Users, Eye, EyeOff, Loader2, LayoutDashboard } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { cn } from '../lib/utils';
 
@@ -31,13 +31,6 @@ const ROLES = [
     desc: "Track your child's bus, get live ETAs",
     icon: Users,
     color: 'purple',
-  },
-  {
-    id: 'passenger',
-    label: 'Passenger',
-    desc: 'Plan journeys and check live bus arrivals',
-    icon: MapPin,
-    color: 'orange',
   },
 ];
 
