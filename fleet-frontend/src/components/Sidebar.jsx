@@ -50,6 +50,7 @@ const NAV = [
 ];
 
 const ROLE_LABEL = {
+  admin:          'Admin',
   fleet_operator: 'Fleet Operator',
   school_staff:   'School Staff',
   parent:         'Parent',
@@ -69,10 +70,10 @@ export default function Sidebar({ activePage, setActivePage }) {
 
   // Filter sections and children visible to current role
   const visibleNav = NAV
-    .filter(s => !role || s.roles.includes(role))
+    .filter(s => !role || role === 'admin' || s.roles.includes(role))
     .map(s => ({
       ...s,
-      children: s.children.filter(c => !c.roles || !role || c.roles.includes(role)),
+      children: s.children.filter(c => !c.roles || !role || role === 'admin' || c.roles.includes(role)),
     }));
 
   return (
