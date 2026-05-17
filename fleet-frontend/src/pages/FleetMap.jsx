@@ -172,7 +172,7 @@ export default function FleetMap({ buses, alerts }) {
   const evBuses   = buses.filter(b => b.fuelType === 'Electric');
   const avgSOC    = evBuses.length
     ? Math.round(evBuses.reduce((s, b) => s + (b.soc || 0), 0) / evBuses.length) : 0;
-  const totalRev  = buses.reduce((s, b) => s + (b.kmToday || 0) * 56.5, 0);
+  const totalRev  = buses.reduce((s, b) => s + (b.kmToday || 0) * 80, 0);
 
   return (
     <div className="flex flex-col gap-4 h-full">
@@ -187,7 +187,7 @@ export default function FleetMap({ buses, alerts }) {
         <StatCard label="Passengers"    value={totalPax}            sub="on board now" />
         <StatCard label="Avg EV SOC"    value={`${avgSOC}%`}        sub="5 electric buses"
           color={avgSOC < 30 ? 'text-red-600' : 'text-green-600'} />
-        <StatCard label="Revenue Today" value={formatINR(totalRev)} sub="GCC ₹56.5/km"
+        <StatCard label="Revenue Today" value={formatINR(totalRev)} sub="GCC ₹80/km"
           color="text-blue-600" />
       </div>
 
@@ -292,7 +292,7 @@ export default function FleetMap({ buses, alerts }) {
                         borderRadius: '8px', padding: '8px',
                       }}>
                         <p style={{ color: '#2563eb', fontSize: '12px' }}>
-                          {bus.kmToday} km · {formatINR(bus.kmToday * 56.5)} today
+                          {bus.kmToday} km · {formatINR(bus.kmToday * 80)} today
                         </p>
                       </div>
                     </div>
