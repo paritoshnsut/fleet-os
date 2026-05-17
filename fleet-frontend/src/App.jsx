@@ -40,11 +40,11 @@ const PAGES = {
 
 // First page shown per role after login / after onboarding
 const ROLE_HOME = {
-  admin:          'fleet-map',
-  fleet_operator: 'fleet-map',
-  school_staff:   'safe-school',
-  parent:         'safe-parent',
-  passenger:      'ondc-journey',
+  admin:             'fleet-map',
+  fleet_operator:    'fleet-map',
+  internal_analyst:  'trip-planner',
+  school_staff:      'safe-school',
+  parent:            'safe-parent',
 };
 
 function AppShell() {

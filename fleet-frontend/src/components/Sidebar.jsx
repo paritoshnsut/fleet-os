@@ -5,7 +5,7 @@ import {
   Bus, Shield, MapPin, LayoutDashboard,
   Activity, FileText, Zap,
   ChevronLeft, ChevronRight, AlertTriangle, ClipboardList,
-  LogOut, Users, Route, Settings2, BarChart2,
+  LogOut, Users, Route, Settings2, BarChart2, LineChart,
 } from 'lucide-react';
 
 const NAV = [
@@ -15,16 +15,24 @@ const NAV = [
     id: 'fleet',
     roles: ['fleet_operator'],
     children: [
-      { label: 'Live Map',             id: 'fleet-map',      icon: MapPin        },
-      { label: 'Alert Center',         id: 'fleet-alerts',   icon: AlertTriangle },
-      { label: 'Driver Scorecards',    id: 'fleet-drivers',  icon: Activity      },
-      { label: 'GCC Compliance',       id: 'fleet-gcc',      icon: FileText      },
-      { label: 'EV Charging',          id: 'fleet-ev',       icon: Zap           },
-      { label: 'Shift Handover',       id: 'fleet-handover', icon: ClipboardList },
-      { label: 'Trip Defect Reports',  id: 'fleet-defects',  icon: ClipboardList },
-      { label: 'Trip Planner',         id: 'trip-planner',   icon: Route         },
-      { label: 'TCO Cost Analysis',    id: 'tco-analysis',   icon: BarChart2     },
-      { label: 'Fleet Setup',          id: 'fleet-setup',    icon: Settings2     },
+      { label: 'Live Map',            id: 'fleet-map',      icon: MapPin        },
+      { label: 'Alert Center',        id: 'fleet-alerts',   icon: AlertTriangle },
+      { label: 'Driver Scorecards',   id: 'fleet-drivers',  icon: Activity      },
+      { label: 'GCC Compliance',      id: 'fleet-gcc',      icon: FileText      },
+      { label: 'EV Charging',         id: 'fleet-ev',       icon: Zap           },
+      { label: 'Shift Handover',      id: 'fleet-handover', icon: ClipboardList },
+      { label: 'Trip Defect Reports', id: 'fleet-defects',  icon: ClipboardList },
+      { label: 'Fleet Setup',         id: 'fleet-setup',    icon: Settings2     },
+    ],
+  },
+  {
+    label: 'Internal Analysis',
+    icon: LineChart,
+    id: 'analysis',
+    roles: ['internal_analyst'],
+    children: [
+      { label: 'Trip Planner',     id: 'trip-planner', icon: Route    },
+      { label: 'TCO Cost Analysis', id: 'tco-analysis', icon: BarChart2 },
     ],
   },
   {
@@ -33,18 +41,18 @@ const NAV = [
     id: 'saferide',
     roles: ['school_staff', 'parent'],
     children: [
-      { label: 'School Dashboard', id: 'safe-school',  icon: LayoutDashboard, roles: ['school_staff'] },
-      { label: 'Parent View',      id: 'safe-parent',  icon: Users,           roles: ['parent']       },
+      { label: 'School Dashboard', id: 'safe-school', icon: LayoutDashboard, roles: ['school_staff'] },
+      { label: 'Parent View',      id: 'safe-parent', icon: Users,           roles: ['parent']       },
     ],
   },
 ];
 
 const ROLE_LABEL = {
-  admin:          'Admin',
-  fleet_operator: 'Fleet Operator',
-  school_staff:   'School Staff',
-  parent:         'Parent',
-  passenger:      'Passenger',
+  admin:             'Admin',
+  fleet_operator:    'Fleet Operator',
+  internal_analyst:  'Internal Analyst',
+  school_staff:      'School Staff',
+  parent:            'Parent',
 };
 
 export default function Sidebar({ activePage, setActivePage }) {
@@ -52,7 +60,7 @@ export default function Sidebar({ activePage, setActivePage }) {
   const role = profile?.role ?? null;
 
   const [collapsed,    setCollapsed]    = useState(false);
-  const [openSections, setOpenSections] = useState({ fleet: true, saferide: true, ondc: true });
+  const [openSections, setOpenSections] = useState({ fleet: true, analysis: true, saferide: true });
 
   function toggleSection(id) {
     setOpenSections(prev => ({ ...prev, [id]: !prev[id] }));

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Bus, Shield, Users, Eye, EyeOff, Loader2, LayoutDashboard } from 'lucide-react';
+import { Bus, Shield, Users, Eye, EyeOff, Loader2, LayoutDashboard, LineChart } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { cn } from '../lib/utils';
 
@@ -17,6 +17,13 @@ const ROLES = [
     desc: 'Manage buses, drivers, alerts & compliance',
     icon: Bus,
     color: 'blue',
+  },
+  {
+    id: 'internal_analyst',
+    label: 'Internal Analyst',
+    desc: 'Trip planning and TCO cost analysis tools',
+    icon: LineChart,
+    color: 'teal',
   },
   {
     id: 'school_staff',
@@ -37,9 +44,9 @@ const ROLES = [
 const COLOR_MAP = {
   indigo: { ring: 'ring-indigo-300', bg: 'bg-indigo-50', border: 'border-indigo-300', icon: 'bg-indigo-100 text-indigo-600', text: 'text-indigo-700' },
   blue:   { ring: 'ring-blue-300',   bg: 'bg-blue-50',   border: 'border-blue-300',   icon: 'bg-blue-100 text-blue-600',   text: 'text-blue-700'   },
+  teal:   { ring: 'ring-teal-300',   bg: 'bg-teal-50',   border: 'border-teal-300',   icon: 'bg-teal-100 text-teal-600',   text: 'text-teal-700'   },
   green:  { ring: 'ring-green-300',  bg: 'bg-green-50',  border: 'border-green-300',  icon: 'bg-green-100 text-green-600',  text: 'text-green-700'  },
   purple: { ring: 'ring-purple-300', bg: 'bg-purple-50', border: 'border-purple-300', icon: 'bg-purple-100 text-purple-600', text: 'text-purple-700' },
-  orange: { ring: 'ring-orange-300', bg: 'bg-orange-50', border: 'border-orange-300', icon: 'bg-orange-100 text-orange-600', text: 'text-orange-700' },
 };
 
 export default function LoginPage() {
