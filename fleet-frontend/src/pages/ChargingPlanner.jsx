@@ -286,6 +286,215 @@ const DEMO_ROWS = [
   { id: 'd3', busId: 'MH12-EF-0003', outTime: '19:45', inTime: '06:15', kwh: '',   copyCount: 1 },
 ];
 
+/* ── Charger Timeline visualisation ──────────────────────────────────────── */
+function ChargerTimeline({ scheduled, tariff }) {
+  const [hovered, setHovered] = useState(null);
+
+  // Group by charger
+  const groups = {};
+  for (const b of scheduled) {
+    if (!groups[b.charger]) groups[b.charger] = [];
+    groups[b.charger].push(b);
+  }
+  const chargers = Object.keys(groups).sort();
+
+  // Dynamic time window: earliest arrival → latest departure, rounded to hours
+  function toAbsMin(hhmm) {
+    if (!hhmm) return 0;
+    const [h, m] = String(hhmm).split(':').map(Number);
+    let min = h * 60 + (m || 0);
+    if (min < 14 * 60) min += 24 * 60; // wrap midnight (anything before 14:00 is "next day")
+    return min;
+  }
+  const allMins = scheduled.flatMap(b => [toAbsMin(b.arrives), toAbsMin(b.departs)]);
+  const T_START = Math.max(14 * 60, Math.floor(Math.min(...allMins) / 60) * 60 - 60);
+  const T_END   = Math.min(38 * 60, Math.ceil(Math.max(...allMins) / 60) * 60 + 60);
+  const T_RANGE = T_END - T_START;
+
+  const ROW_H  = 34;
+  const TARIFF_H = 44;
+  const PAD_L  = 54, PAD_R = 16, PAD_T = 8, PAD_B = 28;
+  const VW     = 720;
+  const W      = VW - PAD_L - PAD_R;
+  const SVG_H  = PAD_T + TARIFF_H + 6 + chargers.length * ROW_H + PAD_B;
+
+  function tx(hhmm) {
+    if (!hhmm) return 0;
+    const abs = toAbsMin(hhmm);
+    return Math.max(0, Math.min(W, ((abs - T_START) / T_RANGE) * W));
+  }
+
+  // Tariff bands (one rect per hour across the window)
+  const bands = [];
+  const startH = Math.floor(T_START / 60);
+  const endH   = Math.ceil(T_END / 60);
+  for (let h = startH; h < endH; h++) {
+    const rate  = tariff[h % 24];
+    const norm  = (rate - 3.8) / (9.5 - 3.8);
+    const x     = Math.max(0, ((h * 60 - T_START) / T_RANGE) * W);
+    const w     = (60 / T_RANGE) * W;
+    const barH  = Math.round((rate / 9.5) * TARIFF_H);
+    bands.push({ h, rate, norm, x, w, barH });
+  }
+
+  // Hour tick marks
+  const ticks = [];
+  for (let h = startH; h <= endH; h += 2) {
+    ticks.push({ x: ((h * 60 - T_START) / T_RANGE) * W, label: `${String(h % 24).padStart(2, '0')}:00` });
+  }
+
+  const COLORS = { optimised: '#22c55e', immediate: '#3b82f6', urgent: '#f59e0b' };
+  function barColor(bus) {
+    if (bus.isUrgent) return COLORS.urgent;
+    return bus.delayed ? COLORS.optimised : COLORS.immediate;
+  }
+
+  const hoveredBus = hovered ? scheduled.find(b => b.busId === hovered) : null;
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <div>
+          <h3 className="text-slate-800 font-semibold">Charger Bay Timeline</h3>
+          <p className="text-slate-400 text-xs mt-0.5">
+            Each row = one charger · bars = charging windows · background = live tariff cost · hover for details
+          </p>
+        </div>
+        <div className="flex items-center gap-3 text-xs">
+          {[['bg-green-500','Delayed (off-peak)'],['bg-blue-500','Immediate'],['bg-amber-500','Urgent (low SOC)']].map(([bg, l]) => (
+            <span key={l} className="flex items-center gap-1.5 text-slate-500">
+              <span className={`w-2.5 h-2.5 rounded-sm ${bg} opacity-80 inline-block`} />{l}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <svg width={VW} height={SVG_H} className="select-none">
+          <defs>
+            <filter id="glow">
+              <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="blur" />
+              <feFlood floodColor="#3b82f6" floodOpacity="0.4" result="color" />
+              <feComposite in="color" in2="blur" operator="in" result="shadow" />
+              <feMerge><feMergeNode in="shadow" /><feMergeNode in="SourceGraphic" /></feMerge>
+            </filter>
+          </defs>
+
+          {/* Tariff heatmap background bands */}
+          {bands.map(b => (
+            <rect key={`bg-${b.h}`}
+              x={PAD_L + b.x} y={PAD_T}
+              width={Math.max(0.5, b.w)} height={TARIFF_H + 6 + chargers.length * ROW_H}
+              fill={`hsl(${Math.round((1 - b.norm) * 120)},70%,55%)`}
+              opacity={0.04 + b.norm * 0.12}
+            />
+          ))}
+
+          {/* Tariff bar chart */}
+          {bands.map(b => (
+            <rect key={`bar-${b.h}`}
+              x={PAD_L + b.x + 1} y={PAD_T + TARIFF_H - b.barH}
+              width={Math.max(0.5, b.w - 2)} height={b.barH}
+              fill={`hsl(${Math.round((1 - b.norm) * 120)},65%,48%)`}
+              opacity={0.65} rx="2"
+            />
+          ))}
+          <text x={PAD_L - 6} y={PAD_T + 10} textAnchor="end" fontSize="8" fill="#94a3b8">₹9.5</text>
+          <text x={PAD_L - 6} y={PAD_T + TARIFF_H - 2} textAnchor="end" fontSize="8" fill="#94a3b8">₹3.8</text>
+          <text x={PAD_L - 6} y={PAD_T + TARIFF_H / 2 + 3} textAnchor="end" fontSize="7" fill="#cbd5e1">₹/kWh</text>
+
+          {/* Divider below tariff */}
+          <line x1={PAD_L} y1={PAD_T + TARIFF_H + 3} x2={PAD_L + W} y2={PAD_T + TARIFF_H + 3}
+            stroke="#e2e8f0" strokeWidth="1" />
+
+          {/* Vertical grid + tick labels */}
+          {ticks.map(t => (
+            <g key={t.label}>
+              <line x1={PAD_L + t.x} y1={PAD_T}
+                    x2={PAD_L + t.x} y2={PAD_T + TARIFF_H + 6 + chargers.length * ROW_H}
+                stroke="#f1f5f9" strokeWidth="0.8" />
+              <text x={PAD_L + t.x} y={SVG_H - 6}
+                textAnchor="middle" fontSize="9" fill="#94a3b8">{t.label}</text>
+            </g>
+          ))}
+
+          {/* Charger rows */}
+          {chargers.map((charger, ci) => {
+            const y0 = PAD_T + TARIFF_H + 6 + ci * ROW_H;
+            return (
+              <g key={charger}>
+                <rect x={PAD_L} y={y0 + 1} width={W} height={ROW_H - 2}
+                  fill={ci % 2 === 0 ? '#f8fafc' : 'white'} />
+                <text x={PAD_L - 6} y={y0 + ROW_H / 2 + 4}
+                  textAnchor="end" fontSize="9" fill="#64748b" fontWeight="600">{charger}</text>
+
+                {groups[charger].map(bus => {
+                  const ax = tx(bus.arrives);
+                  const dx = tx(bus.departs);
+                  const cx = tx(bus.chargeStart);
+                  const ex = tx(bus.chargeEnd);
+                  const bw = Math.max(3, ex - cx);
+                  const isHov = hovered === bus.busId;
+                  const col = barColor(bus);
+
+                  return (
+                    <g key={bus.busId}
+                      onMouseEnter={() => setHovered(bus.busId)}
+                      onMouseLeave={() => setHovered(null)}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      {/* Available window line */}
+                      <rect x={PAD_L + ax} y={y0 + ROW_H / 2 - 1.5}
+                        width={Math.max(1, dx - ax)} height={3}
+                        fill="#cbd5e1" rx="1.5" opacity={0.5} />
+                      {/* Charge bar */}
+                      <rect x={PAD_L + cx} y={y0 + 5}
+                        width={bw} height={ROW_H - 10}
+                        fill={col} rx="4" opacity={isHov ? 1 : 0.78}
+                        filter={isHov ? 'url(#glow)' : undefined}
+                        style={{ transition: 'opacity 0.15s' }}
+                      />
+                      {bw > 30 && (
+                        <text x={PAD_L + cx + bw / 2} y={y0 + ROW_H / 2 + 4}
+                          textAnchor="middle" fontSize={bw > 50 ? '8' : '7'}
+                          fill="white" fontWeight="700" opacity={0.95}>
+                          {bus.busId.replace(/^Bus-0*/, 'B')}
+                        </text>
+                      )}
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          })}
+
+          {/* Left axis border */}
+          <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={PAD_T + TARIFF_H + 6 + chargers.length * ROW_H}
+            stroke="#e2e8f0" strokeWidth="1" />
+        </svg>
+      </div>
+
+      {/* Hover detail strip */}
+      {hoveredBus && (
+        <div className="mt-3 px-4 py-2.5 bg-slate-50 border border-slate-100 rounded-xl text-xs flex flex-wrap items-center gap-4">
+          <span className="font-semibold text-slate-800">{hoveredBus.busId}</span>
+          <span className="text-blue-600 font-medium">{hoveredBus.charger}</span>
+          <span className="text-slate-500">Available: {hoveredBus.arrives} → {hoveredBus.departs}</span>
+          <span className={cn('font-medium', hoveredBus.delayed ? 'text-green-600' : 'text-blue-600')}>
+            Charging: {hoveredBus.chargeStart} – {hoveredBus.chargeEnd}
+            {hoveredBus.delayed ? ` (delayed ${hoveredBus.delayMins}m for off-peak)` : ' (immediate)'}
+          </span>
+          <span className="text-slate-500">{hoveredBus.kWh} kWh</span>
+          <span className="text-slate-700 font-medium">{formatINR(hoveredBus.cost)}</span>
+          {hoveredBus.savings > 0 && (
+            <span className="text-green-600 font-semibold">+{formatINR(hoveredBus.savings)} saved</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ChargingPlanner() {
   const [chargePlan,        setChargePlan]        = useState(null);
   const [parseError,        setParseError]        = useState('');
@@ -492,6 +701,9 @@ export default function ChargingPlanner() {
               <p className="text-red-400 text-xs mt-1">Try increasing charger count or extending the charging window for these buses.</p>
             </div>
           )}
+
+          {/* Charger Timeline visualization */}
+          <ChargerTimeline scheduled={chargePlan.scheduled} tariff={HOUR_TARIFF} />
 
           {/* Schedule table */}
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
