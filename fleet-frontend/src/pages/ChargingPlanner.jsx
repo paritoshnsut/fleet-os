@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import {
-  Zap, AlertTriangle,
+  Zap, AlertTriangle, Info,
   UploadCloud, RotateCcw, FileSpreadsheet,
   Pencil, Plus, Trash2, Copy,
 } from 'lucide-react';
@@ -574,7 +574,19 @@ export default function ChargingPlanner() {
   const [isDemoMode,        setIsDemoMode]        = useState(true);
   const [optimizerLoading,  setOptimizerLoading]  = useState(false);
   const [usedFallback,      setUsedFallback]      = useState(false);
+  const [infoTip,           setInfoTip]           = useState(null);
   const fileRef = useRef(null);
+
+  const COL_INFO = {
+    cost: {
+      title: 'How cost is calculated',
+      body:  'kWh needed × tariff rate at the scheduled charge hour (₹/kWh). kWh is derived from the bus energy capacity × (100% – current SoC%). The rate varies by hour — off-peak (e.g. 02:00) can be as low as ₹3.8/kWh vs ₹9.5/kWh at peak.',
+    },
+    saved: {
+      title: 'How savings are calculated',
+      body:  'Immediate cost (charging the moment the bus arrives, at that hour\'s rate) minus the optimised cost (charging delayed to the cheapest window within the bus\'s dwell time). Zero if no cheaper window was available.',
+    },
+  };
 
   function scheduleAndStore(busList, meta) {
     const minChargers = findMinChargers(busList);
@@ -808,8 +820,26 @@ export default function ChargingPlanner() {
                     <th className="text-left px-3 py-2.5 text-slate-400 font-medium w-36">Optimal window</th>
                     <th className="text-left px-3 py-2.5 text-slate-400 font-medium w-16">Delay</th>
                     <th className="text-right px-3 py-2.5 text-slate-400 font-medium w-20">kWh</th>
-                    <th className="text-right px-3 py-2.5 text-slate-400 font-medium w-24">Cost</th>
-                    <th className="text-right px-4 py-2.5 text-slate-400 font-medium w-24">Saved</th>
+                    <th className="text-right px-3 py-2.5 text-slate-400 font-medium w-24">
+                      <span className="inline-flex items-center justify-end gap-1">
+                        Cost
+                        <button
+                          onMouseEnter={e => setInfoTip({ which: 'cost', rect: e.currentTarget.getBoundingClientRect() })}
+                          onMouseLeave={() => setInfoTip(null)}
+                          className="text-slate-300 hover:text-blue-400 transition-colors"
+                        ><Info size={11} /></button>
+                      </span>
+                    </th>
+                    <th className="text-right px-4 py-2.5 text-slate-400 font-medium w-24">
+                      <span className="inline-flex items-center justify-end gap-1">
+                        Saved
+                        <button
+                          onMouseEnter={e => setInfoTip({ which: 'saved', rect: e.currentTarget.getBoundingClientRect() })}
+                          onMouseLeave={() => setInfoTip(null)}
+                          className="text-slate-300 hover:text-green-400 transition-colors"
+                        ><Info size={11} /></button>
+                      </span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -857,7 +887,22 @@ export default function ChargingPlanner() {
               </table>
             </div>
           </div>
-        </div>
+        {/* Column info tooltip — fixed to escape table overflow clipping */}
+        {infoTip && (() => {
+          const tip = COL_INFO[infoTip.which];
+          const r   = infoTip.rect;
+          return (
+            <div className="fixed z-[9999] pointer-events-none"
+              style={{ top: r.bottom + 8, left: Math.max(8, r.left + r.width / 2 - 130) }}>
+              <div className="bg-slate-900 text-white rounded-xl shadow-2xl border border-slate-700/50 p-3.5 w-64">
+                <p className="font-semibold text-[11px] mb-1.5 text-white">{tip.title}</p>
+                <p className="text-slate-300 text-[10px] leading-relaxed">{tip.body}</p>
+              </div>
+            </div>
+          );
+        })()}
+
+      </div>
       ) : (
         /* Input section */
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
