@@ -651,7 +651,7 @@ export default function TripPlanner() {
   const [results,    setResults]    = useState(null);
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState('');
-  const [benchmark,  setBenchmark]  = useState(113);
+  const [benchmark,  setBenchmark]  = useState('');
   const [algorithm,  setAlgorithm]  = useState('greedy');
   const [busPage,    setBusPage]    = useState(0);
   const [loadStep,         setLoadStep]         = useState(0);
@@ -697,7 +697,7 @@ export default function TripPlanner() {
     try {
       const fd = new FormData();
       fd.append('file', inputMode === 'manual' ? createExcelFromRows(manualRows) : file);
-      fd.append('benchmark_buses', benchmark);
+      fd.append('benchmark_buses', benchmark || parseData.summary.total_trips);
       const res = await fetch(`${OPTIMIZER_URL}/optimize`, { method: 'POST', body: fd });
       if (!res.ok) throw new Error((await res.json()).detail ?? 'Optimization failed');
       const data = await res.json();
@@ -720,7 +720,7 @@ export default function TripPlanner() {
   function reset() {
     setStep('upload'); setFile(null); setParseData(null);
     setResults(null); setError(''); setLoading(false); setBusPage(0);
-    setManualRows(DEMO_ROWS);
+    setBenchmark(''); setManualRows(DEMO_ROWS);
   }
 
   function createExcelFromRows(rows) {
@@ -938,16 +938,27 @@ export default function TripPlanner() {
             </div>
 
             <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-              <p className="text-slate-700 font-semibold mb-3">Configure benchmark</p>
+              <div className="flex items-center gap-2 mb-3">
+                <p className="text-slate-700 font-semibold">Configure benchmark</p>
+                <span className="text-xs text-slate-400 px-2 py-0.5 bg-slate-100 rounded-full">optional</span>
+              </div>
               <div className="space-y-3">
                 <div>
-                  <label className="text-xs text-slate-500 block mb-1">Manual plan bus count (to compare against)</label>
-                  <input type="number" value={benchmark} onChange={e => setBenchmark(+e.target.value)} min={1}
+                  <label className="text-xs text-slate-500 block mb-1">
+                    Client's current bus count <span className="text-slate-300">(leave blank to use {parseData.summary.total_trips} — one bus per trip)</span>
+                  </label>
+                  <input
+                    type="number"
+                    value={benchmark}
+                    onChange={e => setBenchmark(e.target.value)}
+                    min={1}
+                    placeholder={`${parseData.summary.total_trips} (auto)`}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 text-sm
-                      focus:outline-none focus:ring-2 focus:ring-blue-300" />
+                      focus:outline-none focus:ring-2 focus:ring-blue-300 placeholder:text-slate-300"
+                  />
                 </div>
                 <p className="text-slate-400 text-xs">
-                  Default: 113 (manager's TCS Adibatala plan). Change this for other clients.
+                  If the client already has a manual plan with a known bus count, enter it here to show savings against that. Otherwise the optimizer compares against the worst case (one bus per trip).
                 </p>
               </div>
             </div>
