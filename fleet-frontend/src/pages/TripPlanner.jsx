@@ -718,7 +718,7 @@ export default function TripPlanner() {
   function createExcelFromRows(rows) {
     const valid = rows.filter(r => r.routeName && r.outTime && r.inTime && r.km);
     const ws = XLSX.utils.aoa_to_sheet([
-      ['Sl. No', 'Route Name', 'Trip Type', 'Out Time', 'In Time', 'KM', 'Seats'],
+      ['Sl No', 'Route Name', 'Trip Type', 'Out Time', 'In Time', 'KM Per Trip', 'Seats'],
       ...valid.map((r, i) => [i + 1, r.routeName, r.tripType, r.outTime, r.inTime, +r.km, +r.seats || 36]),
     ]);
     const wb = XLSX.utils.book_new();
