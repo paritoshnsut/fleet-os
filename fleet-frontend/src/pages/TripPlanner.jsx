@@ -4,7 +4,7 @@ import {
   Play, RotateCcw, Bus, Zap, TrendingDown,
   Clock, CheckCircle, AlertTriangle, ChevronDown, ChevronUp,
   FileSpreadsheet, IndianRupee, Plus, Trash2, Copy,
-  Table, Upload,
+  Table, Upload, Activity,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -360,9 +360,14 @@ function ComparisonTable({ comparison, summary, selectedAlgo }) {
       <MetricCard icon={TrendingDown} label="Run km per day"  value={`${algo.total_run_km.toLocaleString()} km`}
         sub={`${summary.total_trips} trips · ${summary.unique_routes} routes`}
         color="green" highlight />
+      {/* Monthly savings card hidden — dead-km rate assumption (₹56.5/km) not client-facing
       <MetricCard icon={IndianRupee}  label="Monthly savings" value={savedInr > 0 ? `₹${savedInr.toLocaleString()}` : '—'}
         sub={savedInr > 0 ? 'vs manual plan · dead-km reduction' : 'No savings vs benchmark'}
         color="orange" highlight={savedInr > 0} />
+      */}
+      <MetricCard icon={Activity}     label="Fleet utilization" value={`${algo.utilization}%`}
+        sub="avg km utilisation per bus · optimised schedule"
+        color="purple" highlight />
     </div>
   );
 }
@@ -460,7 +465,8 @@ function ChargingStrategyPanel({ strategyComparison, selectedStrategy, busCount 
     { label: 'Dead km / day',        fcVal: fc.dead_km_per_day,          oppVal: opp.dead_km_per_day,          fmt: v => `${v} km`,                             lowerIsBetter: true  },
     { label: 'Total charge time',    fcVal: fc.total_charge_min,         oppVal: opp.total_charge_min,         fmt: v => `${Math.round(v / 60)} hrs`,           lowerIsBetter: false },
     { label: 'Peak chargers needed', fcVal: fc.peak_chargers_needed,     oppVal: opp.peak_chargers_needed,     fmt: v => v,                                     lowerIsBetter: true  },
-    { label: 'Monthly dead-km cost', fcVal: fc.monthly_dead_km_cost_inr, oppVal: opp.monthly_dead_km_cost_inr, fmt: v => `₹${v.toLocaleString('en-IN')}`,      lowerIsBetter: true  },
+    // Monthly dead-km cost hidden — internal rate assumption not shown to clients
+    // { label: 'Monthly dead-km cost', fcVal: fc.monthly_dead_km_cost_inr, oppVal: opp.monthly_dead_km_cost_inr, fmt: v => `₹${v.toLocaleString('en-IN')}`, lowerIsBetter: true },
   ];
 
   return (
@@ -521,9 +527,11 @@ function ChargingStrategyPanel({ strategyComparison, selectedStrategy, busCount 
           </tbody>
         </table>
       </div>
+      {/* Dead-km footnote hidden alongside the cost row
       <p className="text-slate-300 text-xs mt-3">
         Dead km = 2 × 6 km depot round-trip per charge event · ₹56.5/km · 26 days/month
       </p>
+      */}
     </div>
   );
 }
