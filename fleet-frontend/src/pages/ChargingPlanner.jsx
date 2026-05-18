@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import {
   Zap, AlertTriangle,
@@ -288,9 +288,20 @@ const DEMO_ROWS = [
 
 /* ── Charger Timeline visualisation ──────────────────────────────────────── */
 function ChargerTimeline({ scheduled, tariff }) {
-  const [hovered, setHovered] = useState(null);
+  const containerRef           = useRef(null);
+  const [svgWidth, setSvgWidth] = useState(900);
+  const [tooltip, setTooltip]   = useState(null);
 
-  // Group by charger
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const ro = new ResizeObserver(([e]) =>
+      setSvgWidth(Math.floor(e.contentRect.width) || 900)
+    );
+    ro.observe(containerRef.current);
+    setSvgWidth(Math.floor(containerRef.current.offsetWidth) || 900);
+    return () => ro.disconnect();
+  }, []);
+
   const groups = {};
   for (const b of scheduled) {
     if (!groups[b.charger]) groups[b.charger] = [];
@@ -298,165 +309,197 @@ function ChargerTimeline({ scheduled, tariff }) {
   }
   const chargers = Object.keys(groups).sort();
 
-  // Dynamic time window: earliest arrival → latest departure, rounded to hours
   function toAbsMin(hhmm) {
     if (!hhmm) return 0;
     const [h, m] = String(hhmm).split(':').map(Number);
     let min = h * 60 + (m || 0);
-    if (min < 14 * 60) min += 24 * 60; // wrap midnight (anything before 14:00 is "next day")
+    if (min < 14 * 60) min += 24 * 60;
     return min;
   }
+
   const allMins = scheduled.flatMap(b => [toAbsMin(b.arrives), toAbsMin(b.departs)]);
   const T_START = Math.max(14 * 60, Math.floor(Math.min(...allMins) / 60) * 60 - 60);
   const T_END   = Math.min(38 * 60, Math.ceil(Math.max(...allMins) / 60) * 60 + 60);
   const T_RANGE = T_END - T_START;
 
-  const ROW_H  = 34;
-  const TARIFF_H = 44;
-  const PAD_L  = 54, PAD_R = 16, PAD_T = 8, PAD_B = 28;
-  const VW     = 720;
-  const W      = VW - PAD_L - PAD_R;
-  const SVG_H  = PAD_T + TARIFF_H + 6 + chargers.length * ROW_H + PAD_B;
+  const ROW_H    = 40;
+  const TARIFF_H = 52;
+  const PAD_L    = 62;
+  const PAD_R    = 24;
+  const PAD_T    = 14;
+  const PAD_B    = 34;
+  const W        = Math.max(100, svgWidth - PAD_L - PAD_R);
+  const SVG_H    = PAD_T + TARIFF_H + 10 + chargers.length * ROW_H + PAD_B;
 
   function tx(hhmm) {
     if (!hhmm) return 0;
-    const abs = toAbsMin(hhmm);
-    return Math.max(0, Math.min(W, ((abs - T_START) / T_RANGE) * W));
+    return Math.max(0, Math.min(W, ((toAbsMin(hhmm) - T_START) / T_RANGE) * W));
   }
 
-  // Tariff bands (one rect per hour across the window)
-  const bands = [];
   const startH = Math.floor(T_START / 60);
   const endH   = Math.ceil(T_END / 60);
+
+  const bands = [];
   for (let h = startH; h < endH; h++) {
-    const rate  = tariff[h % 24];
-    const norm  = (rate - 3.8) / (9.5 - 3.8);
-    const x     = Math.max(0, ((h * 60 - T_START) / T_RANGE) * W);
-    const w     = (60 / T_RANGE) * W;
-    const barH  = Math.round((rate / 9.5) * TARIFF_H);
-    bands.push({ h, rate, norm, x, w, barH });
+    const rate = tariff[h % 24];
+    const norm = (rate - 3.8) / (9.5 - 3.8);
+    const x    = Math.max(0, ((h * 60 - T_START) / T_RANGE) * W);
+    const bw   = (60 / T_RANGE) * W;
+    bands.push({ h, rate, norm, x, bw, barH: Math.round(norm * TARIFF_H * 0.80) + 6 });
   }
 
-  // Hour tick marks
   const ticks = [];
   for (let h = startH; h <= endH; h += 2) {
-    ticks.push({ x: ((h * 60 - T_START) / T_RANGE) * W, label: `${String(h % 24).padStart(2, '0')}:00` });
+    const x = ((h * 60 - T_START) / T_RANGE) * W;
+    if (x >= -1 && x <= W + 1)
+      ticks.push({ x, label: `${String(h % 24).padStart(2, '0')}:00` });
   }
 
-  const COLORS = { optimised: '#22c55e', immediate: '#3b82f6', urgent: '#f59e0b' };
-  function barColor(bus) {
-    if (bus.isUrgent) return COLORS.urgent;
-    return bus.delayed ? COLORS.optimised : COLORS.immediate;
+  const COLORS = { optimised: '#10b981', immediate: '#6366f1', urgent: '#f97316' };
+  function barColor(b) {
+    return b.isUrgent ? COLORS.urgent : b.delayed ? COLORS.optimised : COLORS.immediate;
   }
 
-  const hoveredBus = hovered ? scheduled.find(b => b.busId === hovered) : null;
+  const TTIP_W = 216;
+  const TTIP_H = 120;
+
+  function handleMove(e, bus) {
+    if (!containerRef.current) return;
+    const r  = containerRef.current.getBoundingClientRect();
+    const cx = e.clientX - r.left;
+    const cy = e.clientY - r.top;
+    const cH = containerRef.current.offsetHeight;
+    const cW = containerRef.current.offsetWidth;
+    setTooltip({
+      bus,
+      x: Math.min(cx + 18, cW - TTIP_W - 8),
+      y: cy + 20 + TTIP_H > cH ? cy - TTIP_H - 12 : cy + 20,
+    });
+  }
 
   return (
     <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
         <div>
-          <h3 className="text-slate-800 font-semibold">Charger Bay Timeline</h3>
+          <h3 className="text-slate-800 font-semibold text-sm">Charger Bay Timeline</h3>
           <p className="text-slate-400 text-xs mt-0.5">
-            Each row = one charger · bars = charging windows · background = live tariff cost · hover for details
+            Each row = one charger · bars = charging windows · background = tariff intensity · hover a bar for details
           </p>
         </div>
-        <div className="flex items-center gap-3 text-xs">
-          {[['bg-green-500','Delayed (off-peak)'],['bg-blue-500','Immediate'],['bg-amber-500','Urgent (low SOC)']].map(([bg, l]) => (
-            <span key={l} className="flex items-center gap-1.5 text-slate-500">
-              <span className={`w-2.5 h-2.5 rounded-sm ${bg} opacity-80 inline-block`} />{l}
+        <div className="flex items-center gap-5 text-xs">
+          {[
+            [COLORS.optimised, 'Delayed (off-peak)'],
+            [COLORS.immediate, 'Immediate'],
+            [COLORS.urgent,    'Urgent (low SOC)'],
+          ].map(([col, label]) => (
+            <span key={label} className="flex items-center gap-1.5 text-slate-500">
+              <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0 inline-block"
+                style={{ backgroundColor: col, opacity: 0.9 }} />
+              {label}
             </span>
           ))}
         </div>
       </div>
 
-      <div className="overflow-x-auto">
-        <svg width={VW} height={SVG_H} className="select-none">
+      {/* Chart area */}
+      <div ref={containerRef} className="relative w-full">
+        <svg width="100%" height={SVG_H}
+          viewBox={`0 0 ${svgWidth} ${SVG_H}`}
+          className="select-none"
+          style={{ overflow: 'visible' }}
+        >
           <defs>
-            <filter id="glow">
+            <filter id="ctglow" x="-40%" y="-40%" width="180%" height="180%">
               <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="blur" />
-              <feFlood floodColor="#3b82f6" floodOpacity="0.4" result="color" />
+              <feFlood floodColor="#6366f1" floodOpacity="0.5" result="color" />
               <feComposite in="color" in2="blur" operator="in" result="shadow" />
               <feMerge><feMergeNode in="shadow" /><feMergeNode in="SourceGraphic" /></feMerge>
             </filter>
           </defs>
 
-          {/* Tariff heatmap background bands */}
+          {/* Subtle tariff column shading */}
           {bands.map(b => (
             <rect key={`bg-${b.h}`}
               x={PAD_L + b.x} y={PAD_T}
-              width={Math.max(0.5, b.w)} height={TARIFF_H + 6 + chargers.length * ROW_H}
-              fill={`hsl(${Math.round((1 - b.norm) * 120)},70%,55%)`}
-              opacity={0.04 + b.norm * 0.12}
+              width={Math.max(0.5, b.bw)}
+              height={TARIFF_H + 10 + chargers.length * ROW_H}
+              fill={`hsl(${Math.round((1 - b.norm) * 120)},80%,52%)`}
+              opacity={0.022 + b.norm * 0.085}
             />
           ))}
 
-          {/* Tariff bar chart */}
+          {/* Tariff sparkline bars */}
           {bands.map(b => (
             <rect key={`bar-${b.h}`}
-              x={PAD_L + b.x + 1} y={PAD_T + TARIFF_H - b.barH}
-              width={Math.max(0.5, b.w - 2)} height={b.barH}
-              fill={`hsl(${Math.round((1 - b.norm) * 120)},65%,48%)`}
-              opacity={0.65} rx="2"
+              x={PAD_L + b.x + 1.5} y={PAD_T + TARIFF_H - b.barH}
+              width={Math.max(0.5, b.bw - 3)} height={b.barH}
+              fill={`hsl(${Math.round((1 - b.norm) * 120)},68%,44%)`}
+              opacity={0.82} rx="2.5"
             />
           ))}
-          <text x={PAD_L - 6} y={PAD_T + 10} textAnchor="end" fontSize="8" fill="#94a3b8">₹9.5</text>
-          <text x={PAD_L - 6} y={PAD_T + TARIFF_H - 2} textAnchor="end" fontSize="8" fill="#94a3b8">₹3.8</text>
-          <text x={PAD_L - 6} y={PAD_T + TARIFF_H / 2 + 3} textAnchor="end" fontSize="7" fill="#cbd5e1">₹/kWh</text>
 
-          {/* Divider below tariff */}
-          <line x1={PAD_L} y1={PAD_T + TARIFF_H + 3} x2={PAD_L + W} y2={PAD_T + TARIFF_H + 3}
-            stroke="#e2e8f0" strokeWidth="1" />
+          {/* Rate axis labels */}
+          <text x={PAD_L - 8} y={PAD_T + 11}           textAnchor="end" fontSize="9" fill="#94a3b8">₹9.5</text>
+          <text x={PAD_L - 8} y={PAD_T + TARIFF_H - 2}  textAnchor="end" fontSize="9" fill="#94a3b8">₹3.8</text>
+          <text x={PAD_L - 8} y={PAD_T + TARIFF_H / 2 + 4} textAnchor="end" fontSize="8" fill="#cbd5e1">₹/kWh</text>
 
-          {/* Vertical grid + tick labels */}
+          {/* Sparkline baseline */}
+          <line x1={PAD_L} y1={PAD_T + TARIFF_H + 5}
+                x2={PAD_L + W} y2={PAD_T + TARIFF_H + 5}
+            stroke="#e2e8f0" strokeWidth="1.5" />
+
+          {/* Vertical grid + time labels */}
           {ticks.map(t => (
             <g key={t.label}>
-              <line x1={PAD_L + t.x} y1={PAD_T}
-                    x2={PAD_L + t.x} y2={PAD_T + TARIFF_H + 6 + chargers.length * ROW_H}
-                stroke="#f1f5f9" strokeWidth="0.8" />
-              <text x={PAD_L + t.x} y={SVG_H - 6}
-                textAnchor="middle" fontSize="9" fill="#94a3b8">{t.label}</text>
+              <line x1={PAD_L + t.x} y1={PAD_T + TARIFF_H + 5}
+                    x2={PAD_L + t.x} y2={PAD_T + TARIFF_H + 10 + chargers.length * ROW_H}
+                stroke="#f1f5f9" strokeWidth="1" strokeDasharray="3,4" />
+              <text x={PAD_L + t.x} y={SVG_H - 9}
+                textAnchor="middle" fontSize="10" fill="#94a3b8">{t.label}</text>
             </g>
           ))}
 
           {/* Charger rows */}
           {chargers.map((charger, ci) => {
-            const y0 = PAD_T + TARIFF_H + 6 + ci * ROW_H;
+            const y0 = PAD_T + TARIFF_H + 10 + ci * ROW_H;
             return (
               <g key={charger}>
-                <rect x={PAD_L} y={y0 + 1} width={W} height={ROW_H - 2}
-                  fill={ci % 2 === 0 ? '#f8fafc' : 'white'} />
-                <text x={PAD_L - 6} y={y0 + ROW_H / 2 + 4}
-                  textAnchor="end" fontSize="9" fill="#64748b" fontWeight="600">{charger}</text>
+                <rect x={PAD_L} y={y0 + 1} width={W} height={ROW_H - 1}
+                  fill={ci % 2 === 0 ? '#f8fafc' : '#ffffff'} />
+                <text x={PAD_L - 9} y={y0 + ROW_H / 2 + 4}
+                  textAnchor="end" fontSize="10" fill="#64748b" fontWeight="600">{charger}</text>
 
                 {groups[charger].map(bus => {
-                  const ax = tx(bus.arrives);
-                  const dx = tx(bus.departs);
-                  const cx = tx(bus.chargeStart);
-                  const ex = tx(bus.chargeEnd);
-                  const bw = Math.max(3, ex - cx);
-                  const isHov = hovered === bus.busId;
+                  const ax  = tx(bus.arrives);
+                  const dx  = tx(bus.departs);
+                  const cx  = tx(bus.chargeStart);
+                  const ex  = tx(bus.chargeEnd);
+                  const bw  = Math.max(4, ex - cx);
                   const col = barColor(bus);
+                  const isHov = tooltip?.bus?.busId === bus.busId;
 
                   return (
                     <g key={bus.busId}
-                      onMouseEnter={() => setHovered(bus.busId)}
-                      onMouseLeave={() => setHovered(null)}
+                      onMouseMove={e => handleMove(e, bus)}
+                      onMouseLeave={() => setTooltip(null)}
                       style={{ cursor: 'pointer' }}
                     >
-                      {/* Available window line */}
+                      {/* Available window track */}
                       <rect x={PAD_L + ax} y={y0 + ROW_H / 2 - 1.5}
-                        width={Math.max(1, dx - ax)} height={3}
-                        fill="#cbd5e1" rx="1.5" opacity={0.5} />
+                        width={Math.max(2, dx - ax)} height={3}
+                        fill="#e2e8f0" rx="1.5" />
                       {/* Charge bar */}
-                      <rect x={PAD_L + cx} y={y0 + 5}
-                        width={bw} height={ROW_H - 10}
-                        fill={col} rx="4" opacity={isHov ? 1 : 0.78}
-                        filter={isHov ? 'url(#glow)' : undefined}
-                        style={{ transition: 'opacity 0.15s' }}
+                      <rect x={PAD_L + cx} y={y0 + 8}
+                        width={bw} height={ROW_H - 16}
+                        fill={col} rx="6"
+                        opacity={isHov ? 1 : 0.84}
+                        filter={isHov ? 'url(#ctglow)' : undefined}
+                        style={{ transition: 'opacity 0.1s' }}
                       />
-                      {bw > 30 && (
+                      {bw > 36 && (
                         <text x={PAD_L + cx + bw / 2} y={y0 + ROW_H / 2 + 4}
-                          textAnchor="middle" fontSize={bw > 50 ? '8' : '7'}
+                          textAnchor="middle" fontSize={bw > 58 ? '9' : '8'}
                           fill="white" fontWeight="700" opacity={0.95}>
                           {bus.busId.replace(/^Bus-0*/, 'B')}
                         </text>
@@ -469,28 +512,59 @@ function ChargerTimeline({ scheduled, tariff }) {
           })}
 
           {/* Left axis border */}
-          <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={PAD_T + TARIFF_H + 6 + chargers.length * ROW_H}
+          <line x1={PAD_L} y1={PAD_T}
+                x2={PAD_L} y2={PAD_T + TARIFF_H + 10 + chargers.length * ROW_H}
             stroke="#e2e8f0" strokeWidth="1" />
         </svg>
-      </div>
 
-      {/* Hover detail strip */}
-      {hoveredBus && (
-        <div className="mt-3 px-4 py-2.5 bg-slate-50 border border-slate-100 rounded-xl text-xs flex flex-wrap items-center gap-4">
-          <span className="font-semibold text-slate-800">{hoveredBus.busId}</span>
-          <span className="text-blue-600 font-medium">{hoveredBus.charger}</span>
-          <span className="text-slate-500">Available: {hoveredBus.arrives} → {hoveredBus.departs}</span>
-          <span className={cn('font-medium', hoveredBus.delayed ? 'text-green-600' : 'text-blue-600')}>
-            Charging: {hoveredBus.chargeStart} – {hoveredBus.chargeEnd}
-            {hoveredBus.delayed ? ` (delayed ${hoveredBus.delayMins}m for off-peak)` : ' (immediate)'}
-          </span>
-          <span className="text-slate-500">{hoveredBus.kWh} kWh</span>
-          <span className="text-slate-700 font-medium">{formatINR(hoveredBus.cost)}</span>
-          {hoveredBus.savings > 0 && (
-            <span className="text-green-600 font-semibold">+{formatINR(hoveredBus.savings)} saved</span>
-          )}
-        </div>
-      )}
+        {/* Floating tooltip — appears near cursor, no scrolling needed */}
+        {tooltip && (() => {
+          const b       = tooltip.bus;
+          const col     = barColor(b);
+          const strategy = b.isUrgent
+            ? 'Urgent charge'
+            : b.delayed
+            ? `Delayed ${b.delayMins}m → off-peak`
+            : 'Immediate charge';
+          return (
+            <div className="absolute z-50 pointer-events-none"
+              style={{ left: tooltip.x, top: tooltip.y }}>
+              <div className="rounded-xl shadow-2xl border border-slate-700/50 overflow-hidden"
+                style={{ width: TTIP_W, background: '#0f172a' }}>
+                {/* Coloured top strip */}
+                <div className="h-1 w-full" style={{ background: col }} />
+                <div className="p-3.5 text-[11px]">
+                  <div className="flex items-center gap-2 mb-2.5">
+                    <span className="font-semibold text-[13px] text-white leading-none">{b.busId}</span>
+                    <span className="ml-auto text-slate-400 font-medium text-[10px]">{b.charger}</span>
+                  </div>
+                  <div className="space-y-1.5 text-slate-300">
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-500">Available</span>
+                      <span>{b.arrives} → {b.departs}</span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-500">Charging</span>
+                      <span style={{ color: col }}>{b.chargeStart} – {b.chargeEnd}</span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-500">Strategy</span>
+                      <span className="text-right">{strategy}</span>
+                    </div>
+                    <div className="border-t border-slate-700 pt-1.5 mt-0.5 flex items-center gap-2 flex-wrap">
+                      <span className="text-slate-400">{b.kWh} kWh</span>
+                      <span className="ml-auto text-white font-semibold">{formatINR(b.cost)}</span>
+                      {b.savings > 0 && (
+                        <span style={{ color: '#34d399' }} className="font-bold">+{formatINR(b.savings)}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+      </div>
     </div>
   );
 }
