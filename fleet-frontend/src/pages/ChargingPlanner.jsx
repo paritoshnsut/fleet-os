@@ -485,10 +485,6 @@ function ChargerTimeline({ scheduled, tariff }) {
                       onMouseLeave={() => setTooltip(null)}
                       style={{ cursor: 'pointer' }}
                     >
-                      {/* Available window track */}
-                      <rect x={PAD_L + ax} y={y0 + ROW_H / 2 - 1.5}
-                        width={Math.max(2, dx - ax)} height={3}
-                        fill="#e2e8f0" rx="1.5" />
                       {/* Charge bar */}
                       <rect x={PAD_L + cx} y={y0 + 8}
                         width={bw} height={ROW_H - 16}
