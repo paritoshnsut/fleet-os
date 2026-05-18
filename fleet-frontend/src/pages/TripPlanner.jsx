@@ -1,8 +1,10 @@
 import { useState, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import {
   Play, RotateCcw, Bus, Zap, TrendingDown,
   Clock, CheckCircle, AlertTriangle, ChevronDown, ChevronUp,
-  FileSpreadsheet, IndianRupee,
+  FileSpreadsheet, IndianRupee, Plus, Trash2, Copy,
+  Table, Upload,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -13,6 +15,20 @@ import { cn } from '../lib/utils';
 const OPTIMIZER_URL = import.meta.env.VITE_OPTIMIZER_URL ?? 'http://localhost:8000';
 
 const STEPS = ['upload', 'preview', 'results'];
+
+const DEMO_ROWS = [
+  { id: 1, routeName: 'Whitefield – Marathahalli',     tripType: 'pickup', outTime: '06:30', inTime: '07:45', km: '28', seats: '36' },
+  { id: 2, routeName: 'Marathahalli – Whitefield',     tripType: 'drop',   outTime: '09:00', inTime: '10:15', km: '28', seats: '36' },
+  { id: 3, routeName: 'Electronic City – Koramangala', tripType: 'pickup', outTime: '07:00', inTime: '08:30', km: '35', seats: '45' },
+  { id: 4, routeName: 'Koramangala – Electronic City', tripType: 'drop',   outTime: '17:30', inTime: '19:00', km: '35', seats: '45' },
+  { id: 5, routeName: 'Whitefield – Indiranagar',      tripType: 'pickup', outTime: '07:30', inTime: '08:45', km: '22', seats: '36' },
+  { id: 6, routeName: 'Indiranagar – Whitefield',      tripType: 'drop',   outTime: '18:00', inTime: '19:15', km: '22', seats: '36' },
+];
+
+function timeToMin(t) {
+  const [h, m] = (t || '00:00').split(':').map(Number);
+  return h * 60 + (m || 0);
+}
 
 function StepBar({ step }) {
   return (
@@ -512,6 +528,114 @@ function ChargingStrategyPanel({ strategyComparison, selectedStrategy, busCount 
   );
 }
 
+function ManualInputTable({ rows, onChange }) {
+  function updateRow(id, field, value) {
+    onChange(rows.map(r => r.id === id ? { ...r, [field]: value } : r));
+  }
+  function addRow() {
+    const newId = Math.max(0, ...rows.map(r => r.id)) + 1;
+    onChange([...rows, { id: newId, routeName: '', tripType: 'pickup', outTime: '', inTime: '', km: '', seats: '36' }]);
+  }
+  function deleteRow(id) {
+    if (rows.length === 1) return;
+    onChange(rows.filter(r => r.id !== id));
+  }
+  function duplicateRow(id) {
+    const row = rows.find(r => r.id === id);
+    const newId = Math.max(0, ...rows.map(r => r.id)) + 1;
+    const idx = rows.findIndex(r => r.id === id);
+    const next = [...rows];
+    next.splice(idx + 1, 0, { ...row, id: newId });
+    onChange(next);
+  }
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm min-w-[760px]">
+          <thead>
+            <tr className="bg-slate-50 border-b border-slate-100">
+              {['#', 'Route Name', 'Trip Type', 'Out Time', 'In Time', 'KM', 'Seats', ''].map(h => (
+                <th key={h} className="px-3 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wide">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {rows.map((row, i) => (
+              <tr key={row.id} className="hover:bg-slate-50 transition-colors">
+                <td className="px-3 py-2 text-slate-400 text-xs w-8">{i + 1}</td>
+                <td className="px-3 py-2 min-w-[220px]">
+                  <input
+                    value={row.routeName}
+                    onChange={e => updateRow(row.id, 'routeName', e.target.value)}
+                    placeholder="e.g. Whitefield – Koramangala"
+                    className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-slate-700 text-xs focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  />
+                </td>
+                <td className="px-3 py-2 w-28">
+                  <select
+                    value={row.tripType}
+                    onChange={e => updateRow(row.id, 'tripType', e.target.value)}
+                    className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-slate-700 text-xs focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white"
+                  >
+                    <option value="pickup">Pickup</option>
+                    <option value="drop">Drop</option>
+                  </select>
+                </td>
+                <td className="px-3 py-2 w-28">
+                  <input type="time" value={row.outTime}
+                    onChange={e => updateRow(row.id, 'outTime', e.target.value)}
+                    className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-slate-700 text-xs focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  />
+                </td>
+                <td className="px-3 py-2 w-28">
+                  <input type="time" value={row.inTime}
+                    onChange={e => updateRow(row.id, 'inTime', e.target.value)}
+                    className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-slate-700 text-xs focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  />
+                </td>
+                <td className="px-3 py-2 w-20">
+                  <input type="number" value={row.km} min="1" placeholder="25"
+                    onChange={e => updateRow(row.id, 'km', e.target.value)}
+                    className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-slate-700 text-xs focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  />
+                </td>
+                <td className="px-3 py-2 w-20">
+                  <input type="number" value={row.seats} min="1" placeholder="36"
+                    onChange={e => updateRow(row.id, 'seats', e.target.value)}
+                    className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-slate-700 text-xs focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  />
+                </td>
+                <td className="px-3 py-2 w-16">
+                  <div className="flex items-center gap-0.5">
+                    <button onClick={() => duplicateRow(row.id)} title="Duplicate row"
+                      className="p-1.5 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors">
+                      <Copy size={12} />
+                    </button>
+                    <button onClick={() => deleteRow(row.id)} title="Delete row"
+                      className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between bg-slate-50/50">
+        <button onClick={addRow}
+          className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium transition-colors">
+          <Plus size={13} /> Add row
+        </button>
+        <span className="text-xs text-slate-400">
+          {rows.length} trip{rows.length !== 1 ? 's' : ''} · {new Set(rows.map(r => r.routeName).filter(Boolean)).size} routes
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export default function TripPlanner() {
   const [step,       setStep]       = useState('upload');
   const [file,       setFile]       = useState(null);
@@ -524,6 +648,8 @@ export default function TripPlanner() {
   const [busPage,    setBusPage]    = useState(0);
   const [loadStep,         setLoadStep]         = useState(0);
   const [chargingStrategy, setChargingStrategy] = useState('full');
+  const [inputMode,  setInputMode]  = useState('excel');
+  const [manualRows, setManualRows] = useState(DEMO_ROWS);
   const fileRef    = useRef();
   const timersRef  = useRef([]);
 
@@ -562,7 +688,7 @@ export default function TripPlanner() {
 
     try {
       const fd = new FormData();
-      fd.append('file', file);
+      fd.append('file', inputMode === 'manual' ? createExcelFromRows(manualRows) : file);
       fd.append('benchmark_buses', benchmark);
       const res = await fetch(`${OPTIMIZER_URL}/optimize`, { method: 'POST', body: fd });
       if (!res.ok) throw new Error((await res.json()).detail ?? 'Optimization failed');
@@ -586,6 +712,55 @@ export default function TripPlanner() {
   function reset() {
     setStep('upload'); setFile(null); setParseData(null);
     setResults(null); setError(''); setLoading(false); setBusPage(0);
+    setManualRows(DEMO_ROWS);
+  }
+
+  function createExcelFromRows(rows) {
+    const valid = rows.filter(r => r.routeName && r.outTime && r.inTime && r.km);
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['Sl. No', 'Route Name', 'Trip Type', 'Out Time', 'In Time', 'KM', 'Seats'],
+      ...valid.map((r, i) => [i + 1, r.routeName, r.tripType, r.outTime, r.inTime, +r.km, +r.seats || 36]),
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Routes');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    return new File([blob], 'manual_routes.xlsx', { type: blob.type });
+  }
+
+  function buildManualParseData(rows) {
+    const valid = rows.filter(r => r.routeName && r.outTime && r.inTime && r.km);
+    return {
+      summary: {
+        unique_routes:   new Set(valid.map(r => r.routeName)).size,
+        total_trips:     valid.length,
+        total_route_km:  valid.reduce((s, r) => s + (+r.km || 0), 0),
+        pickup_trips:    valid.filter(r => r.tripType === 'pickup').length,
+        drop_trips:      valid.filter(r => r.tripType === 'drop').length,
+        seat_classes:    [...new Set(valid.map(r => +r.seats || 36))].sort((a, b) => a - b),
+      },
+      preview: valid.map((r, i) => ({
+        trip_id:      i + 1,
+        route_name:   r.routeName,
+        trip_type:    r.tripType,
+        start_time:   r.outTime,
+        start_min:    timeToMin(r.outTime),
+        distance_km:  +r.km,
+        seats_needed: +r.seats || 36,
+      })),
+      errors: [],
+    };
+  }
+
+  function handleManualPreview() {
+    const valid = manualRows.filter(r => r.routeName && r.outTime && r.inTime && r.km);
+    if (valid.length === 0) {
+      setError('Fill in at least one complete row (Route Name, Out Time, In Time, KM) before previewing.');
+      return;
+    }
+    setError('');
+    setParseData(buildManualParseData(manualRows));
+    setStep('preview');
   }
 
   function switchAlgorithm(id) {
@@ -632,34 +807,85 @@ export default function TripPlanner() {
         </div>
       )}
 
-      {/* ── STEP 1: Upload ── */}
+      {/* ── STEP 1: Upload / Manual entry ── */}
       {step === 'upload' && (
-        <div
-          onClick={() => fileRef.current?.click()}
-          onDragOver={e => e.preventDefault()}
-          onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleUpload(f); }}
-          className={cn(
-            'border-2 border-dashed rounded-2xl p-16 text-center cursor-pointer transition-all',
-            loading ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50'
-          )}
-        >
-          <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden"
-            onChange={e => { if (e.target.files[0]) handleUpload(e.target.files[0]); }} />
-          {loading ? (
-            <div className="flex flex-col items-center gap-3">
-              <div className="w-12 h-12 rounded-full border-4 border-blue-200 border-t-blue-600 animate-spin" />
-              <p className="text-blue-600 font-medium">Parsing route data…</p>
+        <div className="flex flex-col gap-4">
+          {/* Mode toggle */}
+          <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1 w-fit">
+            <button
+              onClick={() => setInputMode('excel')}
+              className={cn(
+                'flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all',
+                inputMode === 'excel' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              )}
+            >
+              <Upload size={14} /> Upload Excel
+            </button>
+            <button
+              onClick={() => setInputMode('manual')}
+              className={cn(
+                'flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all',
+                inputMode === 'manual' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              )}
+            >
+              <Table size={14} /> Enter Manually
+            </button>
+          </div>
+
+          {/* Excel drop zone */}
+          {inputMode === 'excel' && (
+            <div
+              onClick={() => fileRef.current?.click()}
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleUpload(f); }}
+              className={cn(
+                'border-2 border-dashed rounded-2xl p-16 text-center cursor-pointer transition-all',
+                loading ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50'
+              )}
+            >
+              <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden"
+                onChange={e => { if (e.target.files[0]) handleUpload(e.target.files[0]); }} />
+              {loading ? (
+                <div className="flex flex-col items-center gap-3">
+                  <div className="w-12 h-12 rounded-full border-4 border-blue-200 border-t-blue-600 animate-spin" />
+                  <p className="text-blue-600 font-medium">Parsing route data…</p>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-3">
+                  <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-center">
+                    <FileSpreadsheet size={28} className="text-blue-500" />
+                  </div>
+                  <div>
+                    <p className="text-slate-700 font-semibold">Drop your client Excel here</p>
+                    <p className="text-slate-400 text-sm mt-1">or click to browse · .xlsx / .xls</p>
+                  </div>
+                  <p className="text-slate-300 text-xs">Expects Adibatala-format sheet: Route Name, KM, In/Out time, Trip Type</p>
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="flex flex-col items-center gap-3">
-              <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-center">
-                <FileSpreadsheet size={28} className="text-blue-500" />
+          )}
+
+          {/* Manual entry table */}
+          {inputMode === 'manual' && (
+            <div className="flex flex-col gap-4">
+              {/* Field guide */}
+              <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700 flex flex-wrap gap-x-6 gap-y-1">
+                <span><strong>Route Name</strong> — from–to location (e.g. "Whitefield – Koramangala")</span>
+                <span><strong>Trip Type</strong> — Pickup = employees going to office · Drop = returning home</span>
+                <span><strong>Out Time</strong> — when the bus leaves the depot</span>
+                <span><strong>In Time</strong> — when the bus returns to the depot</span>
+                <span><strong>KM</strong> — one-way route distance · <strong>Seats</strong> — bus capacity for this route</span>
               </div>
-              <div>
-                <p className="text-slate-700 font-semibold">Drop your client Excel here</p>
-                <p className="text-slate-400 text-sm mt-1">or click to browse · .xlsx / .xls</p>
-              </div>
-              <p className="text-slate-300 text-xs">Expects Adibatala-format sheet: Route Name, KM, In/Out time, Trip Type</p>
+
+              <ManualInputTable rows={manualRows} onChange={setManualRows} />
+
+              <button
+                onClick={handleManualPreview}
+                className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700
+                  text-white font-semibold py-3.5 rounded-xl transition-colors"
+              >
+                <CheckCircle size={16} /> Preview {manualRows.filter(r => r.routeName && r.outTime && r.inTime && r.km).length} routes → continue
+              </button>
             </div>
           )}
         </div>

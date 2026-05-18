@@ -474,6 +474,8 @@ def ortools_scheduler(trips: List[Trip], time_limit_sec: int = 30) -> Optimizati
     can_chain = [(i, j) for i in range(n) for j in range(n)
                  if i != j and _can_follow(trips_s[i], trips_s[j])]
 
+    print(f"[ortools] trips={n}  can_chain pairs={len(can_chain)}")
+
     model  = cp_model.CpModel()
     follows = {(i, j): model.new_bool_var(f'f{i}_{j}') for (i, j) in can_chain}
 
@@ -497,7 +499,9 @@ def ortools_scheduler(trips: List[Trip], time_limit_sec: int = 30) -> Optimizati
     solver.parameters.num_search_workers  = 4
     status = solver.solve(model)
 
+    print(f"[ortools] solver status={status}  OPTIMAL={cp_model.OPTIMAL}  FEASIBLE={cp_model.FEASIBLE}")
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        print("[ortools] falling back to greedy")
         return greedy_scheduler(trips)   # fallback if unsolvable
 
     # Reconstruct bus schedules from the matching
