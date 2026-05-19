@@ -4,9 +4,9 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
   Shield, AlertTriangle, CheckCircle, Users,
-  Bell, Navigation, Clock, XCircle, Activity,
-  Phone, Edit3, UserX, Lock, Unlock,
-  MessageSquare, ChevronDown, ChevronUp, Flag
+  Bell, Clock, XCircle, Activity,
+  Phone, Edit3, Lock, Unlock,
+  MessageSquare, Flag
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -42,6 +42,17 @@ const ROUTE_PATHS = [
     ],
   },
 ];
+
+function interpolateAlongRoute(stops, progress) {
+  const N = stops.length;
+  if (N < 2) return stops[0]?.pos ?? [18.52, 73.85];
+  const clamped = Math.min(Math.max(progress, 0), 0.9999);
+  const segIdx  = Math.min(Math.floor(clamped * (N - 1)), N - 2);
+  const segFrac = clamped * (N - 1) - segIdx;
+  const [lat1, lng1] = stops[segIdx].pos;
+  const [lat2, lng2] = stops[segIdx + 1].pos;
+  return [lat1 + (lat2 - lat1) * segFrac, lng1 + (lng2 - lng1) * segFrac];
+}
 
 function createSchoolBusIcon(status) {
   const color = status === 'alert' ? '#ef4444' : status === 'warning' ? '#f59e0b' : '#22c55e';
@@ -219,12 +230,15 @@ function ParentCallPanel({ student, onClose, onLog }) {
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center
       justify-center z-[9999] p-4">
       <div className="bg-white border border-slate-200 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-2">
           <p className="text-slate-800 font-bold">Contact Parent</p>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
             <XCircle size={18} />
           </button>
         </div>
+        <p className="text-xs text-slate-400 mb-4">
+          Workflow demo — in production, calls trigger via Twilio · SMS via MSG91. All contacts logged as incidents.
+        </p>
 
         <div className="bg-red-50 border border-red-200 rounded-xl p-3 mb-4 text-xs text-red-700">
           🚨 Alert: <span className="font-medium">{student.name}</span> has not boarded at {student.stop}.
@@ -479,9 +493,22 @@ export default function SafeSchool({ buses, fetchStudents }) {
   const [callLog,         setCallLog]         = useState([]);
   const [expandedStudent, setExpandedStudent] = useState(null);
   const [flaggedDrivers,  setFlaggedDrivers]  = useState([]);
+  const [busProgress,     setBusProgress]     = useState([0.12, 0.45, 0.71]);
+  const [broadcastMsg,    setBroadcastMsg]    = useState('Bus is running 10 minutes late due to traffic near Shivajinagar.');
+  const [broadcastSent,   setBroadcastSent]   = useState(false);
 
   useEffect(() => {
     fetchStudents().then(data => { setStudents(data); setLoading(false); });
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setBusProgress(prev => prev.map(p => {
+        const next = p + 0.008;
+        return next >= 1 ? 0 : next;
+      }));
+    }, 2000);
+    return () => clearInterval(id);
   }, []);
 
   const schoolBuses = buses.slice(0, 3);
@@ -538,6 +565,18 @@ export default function SafeSchool({ buses, fetchStudents }) {
         message: `${buses.find(b => b.busId === busId)?.driverName} flagged · Admin notified`,
       });
     }
+  }
+
+  function handleBroadcast() {
+    if (!broadcastMsg.trim()) return;
+    const preview = broadcastMsg.length > 55 ? broadcastMsg.slice(0, 55) + '…' : broadcastMsg;
+    addToast({
+      type: 'success',
+      title: `Broadcast sent to ${total} parents`,
+      message: `"${preview}"`,
+    });
+    setBroadcastSent(true);
+    setTimeout(() => setBroadcastSent(false), 3500);
   }
 
   function triggerDeviation(bus) {
@@ -674,11 +713,12 @@ export default function SafeSchool({ buses, fetchStudents }) {
                 )),
               ])}
 
-              {/* Live bus markers */}
-              {schoolBuses.map(bus => {
-                if (!bus.lat || !bus.lng) return null;
+              {/* Live bus markers — positions interpolated along route polylines */}
+              {schoolBuses.map((bus, idx) => {
+                const route = ROUTE_PATHS[idx % ROUTE_PATHS.length];
+                const pos   = interpolateAlongRoute(route.stops, busProgress[idx] ?? 0);
                 return (
-                  <Marker key={bus.busId} position={[bus.lat, bus.lng]}
+                  <Marker key={bus.busId} position={pos}
                     icon={createSchoolBusIcon(bus.speed > 65 ? 'alert' : 'ok')}>
                     <Popup>
                       <div style={{ background: 'white', color: '#1e293b', padding: '4px', minWidth: '160px' }}>
@@ -884,12 +924,21 @@ export default function SafeSchool({ buses, fetchStudents }) {
                 placeholder-slate-400 mb-2"
               rows={2}
               placeholder="Message all parents on this route..."
-              defaultValue="Bus is running 10 minutes late due to traffic near Shivajinagar."
+              value={broadcastMsg}
+              onChange={e => setBroadcastMsg(e.target.value)}
             />
-            <button className="w-full py-2 bg-purple-50 border border-purple-200
-              rounded-lg text-purple-700 text-sm font-medium hover:bg-purple-100
-              transition-colors flex items-center justify-center gap-2">
-              <Bell size={14} /> Send to All Parents
+            <button
+              onClick={handleBroadcast}
+              disabled={!broadcastMsg.trim() || broadcastSent}
+              className={cn(
+                'w-full py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2',
+                broadcastSent
+                  ? 'bg-green-50 border border-green-200 text-green-700'
+                  : 'bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100 disabled:opacity-40'
+              )}>
+              {broadcastSent
+                ? <><CheckCircle size={14} /> Sent to {total} parents</>
+                : <><Bell size={14} /> Send to All Parents</>}
             </button>
           </div>
 
