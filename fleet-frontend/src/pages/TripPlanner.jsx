@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 import html2canvas from 'html2canvas';
 import {
   Play, RotateCcw, Bus, Zap, TrendingDown,
@@ -834,7 +834,7 @@ export default function TripPlanner() {
       np();
       let y = MT;
       y = secHead('Executive Summary — Algorithm Comparison', y);
-      doc.autoTable({
+      autoTable(doc, {
         startY: y,
         head: [['Algorithm', 'Buses', 'Run KM/day', 'Utilization', 'vs Benchmark']],
         body: [
@@ -857,7 +857,7 @@ export default function TripPlanner() {
       y = doc.lastAutoTable.finalY + 8;
       y = secHead('Input Data Summary', y);
       const ps = parseData?.summary ?? {};
-      doc.autoTable({
+      autoTable(doc, {
         startY: y,
         head: [['Metric', 'Value']],
         body: [
@@ -948,7 +948,7 @@ export default function TripPlanner() {
       np();
       y = MT;
       y = secHead('Detailed Bus Assignment Table', y);
-      doc.autoTable({
+      autoTable(doc, {
         startY: y,
         head: [['Bus #', 'Legs', 'Routes covered', 'Start', 'End', 'Run KM', 'Seats']],
         body: buses.map(bus => [
@@ -976,7 +976,7 @@ export default function TripPlanner() {
         y = MT;
         y = secHead('EV Charging Strategy Analysis', y);
         const { full_charge: fc, opportunity: opp } = sc;
-        doc.autoTable({
+        autoTable(doc, {
           startY: y,
           head: [['Metric', 'Full Charge', 'Opportunity Charging', 'Better option']],
           body: [
