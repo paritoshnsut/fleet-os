@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, CircleMarker } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
@@ -9,6 +9,39 @@ import {
   MessageSquare, ChevronDown, ChevronUp, Flag
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+
+const ROUTE_PATHS = [
+  {
+    color: '#3b82f6',
+    stops: [
+      { pos: [18.5016, 73.8568], name: 'Swargate' },
+      { pos: [18.5162, 73.8419], name: 'Deccan' },
+      { pos: [18.5437, 73.8183], name: 'Aundh' },
+      { pos: [18.5623, 73.7802], name: 'Wakad' },
+      { pos: [18.5910, 73.7210], name: 'Hinjewadi' },
+    ],
+  },
+  {
+    color: '#10b981',
+    stops: [
+      { pos: [18.4522, 73.8614], name: 'Katraj' },
+      { pos: [18.4818, 73.8636], name: 'Market Yard' },
+      { pos: [18.5200, 73.8567], name: 'Pune Station' },
+      { pos: [18.5424, 73.9009], name: 'Nagar Road' },
+      { pos: [18.5731, 73.9064], name: 'Vishrantwadi' },
+    ],
+  },
+  {
+    color: '#8b5cf6',
+    stops: [
+      { pos: [18.5070, 73.8143], name: 'Kothrud' },
+      { pos: [18.5122, 73.8320], name: 'Karve Road' },
+      { pos: [18.5204, 73.8560], name: 'Shivajinagar' },
+      { pos: [18.4980, 73.8950], name: 'Wanowrie' },
+      { pos: [18.5090, 73.9261], name: 'Hadapsar' },
+    ],
+  },
+];
 
 function createSchoolBusIcon(status) {
   const color = status === 'alert' ? '#ef4444' : status === 'warning' ? '#f59e0b' : '#22c55e';
@@ -618,13 +651,30 @@ export default function SafeSchool({ buses, fetchStudents }) {
         <div className="lg:col-span-2 flex flex-col gap-4">
 
           {/* Map */}
-          <div className="rounded-2xl overflow-hidden border border-slate-200 shadow-sm" style={{ height: '300px' }}>
-            <MapContainer center={[18.5204, 73.8567]} zoom={12}
+          <div className="rounded-2xl overflow-hidden border border-slate-200 shadow-sm" style={{ height: '380px' }}>
+            <MapContainer center={[18.5204, 73.8567]} zoom={13}
               style={{ width: '100%', height: '100%', background: '#f1f5f9' }}>
               <TileLayer
                 url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
                 attribution='&copy; CARTO'
               />
+
+              {/* Route polylines + stop dots */}
+              {ROUTE_PATHS.flatMap((route, ri) => [
+                <Polyline key={`line-${ri}`}
+                  positions={route.stops.map(s => s.pos)}
+                  pathOptions={{ color: route.color, weight: 3.5, opacity: 0.75, dashArray: '8,5' }}
+                />,
+                ...route.stops.map(stop => (
+                  <CircleMarker key={`stop-${ri}-${stop.name}`}
+                    center={stop.pos} radius={4}
+                    pathOptions={{ color: '#fff', fillColor: route.color, fillOpacity: 1, weight: 2 }}>
+                    <Popup><span style={{ fontSize: '12px', fontWeight: 600 }}>{stop.name}</span></Popup>
+                  </CircleMarker>
+                )),
+              ])}
+
+              {/* Live bus markers */}
               {schoolBuses.map(bus => {
                 if (!bus.lat || !bus.lng) return null;
                 return (
