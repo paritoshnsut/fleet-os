@@ -868,10 +868,16 @@ export default function ChargingPlanner() {
                         {r.delayed ? `+${r.delayMins}m` : <span className="text-green-500">now</span>}
                       </td>
                       <td className="px-3 py-2.5 text-right text-slate-600">{r.kWh}</td>
-                      <td className="px-3 py-2.5 text-right text-slate-700 font-medium">{formatINR(r.cost)}</td>
-                      <td className="px-4 py-2.5 text-right font-semibold text-green-600">
-                        {r.savings > 0 ? `+${formatINR(r.savings)}` : '—'}
-                      </td>
+                      <td
+                        className="px-3 py-2.5 text-right text-slate-700 font-medium cursor-help underline decoration-dotted decoration-slate-300"
+                        onMouseEnter={e => setInfoTip({ which: 'cost-row', rect: e.currentTarget.getBoundingClientRect(), row: r })}
+                        onMouseLeave={() => setInfoTip(null)}
+                      >{formatINR(r.cost)}</td>
+                      <td
+                        className="px-4 py-2.5 text-right font-semibold text-green-600 cursor-help underline decoration-dotted decoration-green-300"
+                        onMouseEnter={e => setInfoTip({ which: 'saved-row', rect: e.currentTarget.getBoundingClientRect(), row: r })}
+                        onMouseLeave={() => setInfoTip(null)}
+                      >{r.savings > 0 ? `+${formatINR(r.savings)}` : '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -887,16 +893,94 @@ export default function ChargingPlanner() {
               </table>
             </div>
           </div>
-        {/* Column info tooltip — fixed to escape table overflow clipping */}
+        {/* Unified tooltip — fixed positioning escapes table overflow */}
         {infoTip && (() => {
-          const tip = COL_INFO[infoTip.which];
-          const r   = infoTip.rect;
+          const pos = infoTip.rect;
+          const tipTop  = pos.bottom + 8;
+
+          /* ── Header ⓘ: general formula explanation ── */
+          if (infoTip.which === 'cost' || infoTip.which === 'saved') {
+            const tip = COL_INFO[infoTip.which];
+            return (
+              <div className="fixed z-[9999] pointer-events-none"
+                style={{ top: tipTop, left: Math.max(8, pos.left + pos.width / 2 - 130) }}>
+                <div className="bg-slate-900 text-white rounded-xl shadow-2xl border border-slate-700/50 p-3.5 w-64">
+                  <p className="font-semibold text-[11px] mb-1.5">{tip.title}</p>
+                  <p className="text-slate-300 text-[10px] leading-relaxed">{tip.body}</p>
+                </div>
+              </div>
+            );
+          }
+
+          /* ── Per-row: actual math for this bus ── */
+          const row = infoTip.row;
+          if (!row) return null;
+          const actualRate = row.kWh > 0 ? +(row.cost    / row.kWh).toFixed(2) : 0;
+          const naiveRate  = row.kWh > 0 ? +(row.naiveCost / row.kWh).toFixed(2) : 0;
+          const tipLeft    = Math.max(8, pos.left - 260);
+
+          if (infoTip.which === 'cost-row') {
+            return (
+              <div className="fixed z-[9999] pointer-events-none"
+                style={{ top: tipTop, left: tipLeft }}>
+                <div className="bg-slate-900 text-white rounded-xl shadow-2xl border border-slate-700/50 overflow-hidden w-60">
+                  <div className="h-0.5 w-full bg-indigo-500" />
+                  <div className="p-3.5 text-[11px]">
+                    <p className="font-semibold text-white mb-2.5">Cost breakdown · {row.busId}</p>
+                    <div className="space-y-1.5 text-slate-300">
+                      <div className="flex justify-between gap-4">
+                        <span className="text-slate-500">Energy needed</span>
+                        <span>{row.kWh} kWh</span>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <span className="text-slate-500">Rate at {row.chargeStart}</span>
+                        <span>₹{actualRate}/kWh</span>
+                      </div>
+                      <div className="border-t border-slate-700 pt-1.5 flex justify-between gap-4 font-bold">
+                        <span className="text-slate-400">{row.kWh} × ₹{actualRate}</span>
+                        <span className="text-white">{formatINR(row.cost)}</span>
+                      </div>
+                    </div>
+                    {row.delayed && (
+                      <p className="text-emerald-400 text-[10px] mt-2">
+                        Delayed {row.delayMins}m from {row.arrives} → cheaper off-peak rate
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          /* saved-row */
+          const savingsPct = row.naiveCost > 0
+            ? Math.round((row.savings / row.naiveCost) * 100) : 0;
           return (
             <div className="fixed z-[9999] pointer-events-none"
-              style={{ top: r.bottom + 8, left: Math.max(8, r.left + r.width / 2 - 130) }}>
-              <div className="bg-slate-900 text-white rounded-xl shadow-2xl border border-slate-700/50 p-3.5 w-64">
-                <p className="font-semibold text-[11px] mb-1.5 text-white">{tip.title}</p>
-                <p className="text-slate-300 text-[10px] leading-relaxed">{tip.body}</p>
+              style={{ top: tipTop, left: tipLeft }}>
+              <div className="bg-slate-900 text-white rounded-xl shadow-2xl border border-slate-700/50 overflow-hidden w-64">
+                <div className="h-0.5 w-full bg-emerald-500" />
+                <div className="p-3.5 text-[11px]">
+                  <p className="font-semibold text-white mb-2.5">Savings breakdown · {row.busId}</p>
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between gap-4">
+                      <span className="text-slate-500">If charged at {row.arrives}</span>
+                      <span className="text-red-400 font-medium">
+                        {row.kWh} × ₹{naiveRate} = {formatINR(row.naiveCost)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-slate-500">Optimised at {row.chargeStart}</span>
+                      <span className="text-emerald-400 font-medium">
+                        {row.kWh} × ₹{actualRate} = {formatINR(row.cost)}
+                      </span>
+                    </div>
+                    <div className="border-t border-slate-700 pt-1.5 flex justify-between gap-4 font-bold">
+                      <span className="text-slate-400">You saved ({savingsPct}% cheaper)</span>
+                      <span className="text-emerald-400">+{formatINR(row.savings)}</span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           );
