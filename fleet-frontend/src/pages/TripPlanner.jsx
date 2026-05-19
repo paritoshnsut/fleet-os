@@ -1,10 +1,13 @@
 import { useState, useRef } from 'react';
 import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
+import html2canvas from 'html2canvas';
 import {
   Play, RotateCcw, Bus, Zap, TrendingDown,
   Clock, CheckCircle, AlertTriangle, ChevronDown, ChevronUp,
   FileSpreadsheet, IndianRupee, Plus, Trash2, Copy,
-  Table, Upload, Activity,
+  Table, Upload, Activity, Download, X,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -658,8 +661,13 @@ export default function TripPlanner() {
   const [chargingStrategy, setChargingStrategy] = useState('full');
   const [inputMode,  setInputMode]  = useState('excel');
   const [manualRows, setManualRows] = useState(DEMO_ROWS);
-  const fileRef    = useRef();
-  const timersRef  = useRef([]);
+  const fileRef      = useRef();
+  const timersRef    = useRef([]);
+  const ganttRef     = useRef(null);
+  const networkRef   = useRef(null);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [clientName,      setClientName]      = useState('');
+  const [pdfLoading,      setPdfLoading]      = useState(false);
 
   const BUS_PAGE_SIZE = 20;
 
@@ -721,6 +729,294 @@ export default function TripPlanner() {
     setStep('upload'); setFile(null); setParseData(null);
     setResults(null); setError(''); setLoading(false); setBusPage(0);
     setBenchmark(''); setManualRows(DEMO_ROWS);
+  }
+
+  async function generatePDF(name) {
+    setPdfLoading(true);
+    try {
+      const doc  = new jsPDF('p', 'mm', 'a4');
+      const W = 210, H = 297, ML = 18, MR = 18, MT = 15;
+      const CW = W - ML - MR;
+      const algo      = results[algorithm];
+      const comp      = results.comparison;
+      const algoLabel = algorithm === 'greedy' ? 'Smart Greedy'
+                      : algorithm === 'pairing' ? 'Pairing Heuristic'
+                      : 'OR-Tools CP-SAT';
+      const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
+      let pageNum = 1;
+
+      function footer() {
+        doc.setFontSize(7.5); doc.setFont('helvetica', 'normal');
+        doc.setTextColor(148, 163, 184);
+        doc.text(`FleetOS · Tata Motors CV · Page ${pageNum}`, W / 2, H - 8, { align: 'center' });
+      }
+      function np() { doc.addPage(); pageNum++; }
+      function secHead(title, y) {
+        doc.setFillColor(241, 245, 249);
+        doc.rect(ML, y, CW, 7.5, 'F');
+        doc.setDrawColor(226, 232, 240); doc.setLineWidth(0.3);
+        doc.line(ML, y + 7.5, ML + CW, y + 7.5);
+        doc.setFontSize(9); doc.setFont('helvetica', 'bold');
+        doc.setTextColor(15, 23, 42);
+        doc.text(title.toUpperCase(), ML + 3, y + 5.2);
+        return y + 11;
+      }
+
+      // ── PAGE 1: COVER ──────────────────────────────────────────────────────
+      doc.setFillColor(15, 23, 42);
+      doc.rect(0, 0, W, 72, 'F');
+      doc.setFillColor(59, 130, 246);
+      doc.rect(0, 72, W, 1.8, 'F');
+
+      // Logo mark
+      doc.setFillColor(59, 130, 246);
+      doc.roundedRect(ML, 18, 11, 11, 2, 2, 'F');
+      doc.setFontSize(9); doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      doc.text('F', ML + 3.8, 25.5);
+
+      doc.setFontSize(17); doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      doc.text('FleetOS', ML + 14, 25.5);
+      doc.setFontSize(8); doc.setFont('helvetica', 'normal');
+      doc.setTextColor(148, 163, 184);
+      doc.text('Tata Motors · CV Passenger Division · Pune', ML + 14, 31.5);
+
+      doc.setFontSize(26); doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      doc.text('Fleet Optimization', ML, 52);
+      doc.text('Report', ML, 63);
+
+      // Info section
+      let iy = 86;
+      [
+        ['Prepared for', name || 'Client'],
+        ['Report date',  today],
+        ['Algorithm',    algoLabel],
+        ['Trips analyzed', String(results.summary?.total_trips ?? parseData?.summary?.total_trips ?? '—')],
+        ['Unique routes',  String(results.summary?.unique_routes ?? parseData?.summary?.unique_routes ?? '—')],
+      ].forEach(([label, val]) => {
+        doc.setFontSize(9); doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 116, 139); doc.text(label, ML, iy);
+        doc.setFont('helvetica', 'bold'); doc.setTextColor(15, 23, 42);
+        doc.text(val, ML + 52, iy);
+        iy += 10;
+      });
+
+      doc.setDrawColor(226, 232, 240); doc.setLineWidth(0.4);
+      doc.line(ML, iy + 2, ML + CW, iy + 2);
+
+      // Key metric boxes
+      const boxW = (CW - 8) / 3;
+      const mY = iy + 10;
+      [
+        { label: 'BUSES NEEDED',     value: String(algo.bus_count),         sub: `saves ${comp.benchmark_buses - algo.bus_count} vs manual` },
+        { label: 'RUN KM / DAY',     value: `${algo.total_run_km} km`,      sub: `${parseData?.summary?.total_trips ?? '—'} trips scheduled` },
+        { label: 'FLEET UTILIZATION',value: `${algo.utilization}%`,         sub: 'avg km utilisation per bus' },
+      ].forEach((m, i) => {
+        const bx = ML + i * (boxW + 4);
+        doc.setFillColor(248, 250, 252); doc.roundedRect(bx, mY, boxW, 28, 3, 3, 'F');
+        doc.setDrawColor(226, 232, 240); doc.roundedRect(bx, mY, boxW, 28, 3, 3, 'S');
+        doc.setFontSize(19); doc.setFont('helvetica', 'bold');
+        doc.setTextColor(15, 58, 95); doc.text(m.value, bx + boxW / 2, mY + 12, { align: 'center' });
+        doc.setFontSize(7.5); doc.setFont('helvetica', 'bold');
+        doc.setTextColor(100, 116, 139); doc.text(m.label, bx + boxW / 2, mY + 18, { align: 'center' });
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(7);
+        doc.setTextColor(148, 163, 184); doc.text(m.sub, bx + boxW / 2, mY + 23.5, { align: 'center' });
+      });
+
+      doc.setFontSize(7.5); doc.setFont('helvetica', 'normal');
+      doc.setTextColor(148, 163, 184);
+      doc.text('CONFIDENTIAL · Generated by FleetOS · Tata Motors CV Passenger Division', W / 2, H - 12, { align: 'center' });
+      footer();
+
+      // ── PAGE 2: ALGORITHM COMPARISON ──────────────────────────────────────
+      np();
+      let y = MT;
+      y = secHead('Executive Summary — Algorithm Comparison', y);
+      doc.autoTable({
+        startY: y,
+        head: [['Algorithm', 'Buses', 'Run KM/day', 'Utilization', 'vs Benchmark']],
+        body: [
+          ['Manual (benchmark)', comp.benchmark_buses, '—', '—', 'baseline'],
+          ['Smart Greedy',       comp.greedy.bus_count,  `${comp.greedy.total_run_km} km`,  `${comp.greedy.utilization}%`,  `saves ${comp.benchmark_buses - comp.greedy.bus_count}`],
+          ['Pairing Heuristic',  comp.pairing.bus_count, `${comp.pairing.total_run_km} km`, `${comp.pairing.utilization}%`, `saves ${comp.benchmark_buses - comp.pairing.bus_count}`],
+          ['OR-Tools CP-SAT',    comp.ortools.bus_count, `${comp.ortools.total_run_km} km`, `${comp.ortools.utilization}%`, `saves ${comp.benchmark_buses - comp.ortools.bus_count}`],
+        ],
+        margin: { left: ML, right: MR },
+        styles: { fontSize: 9, cellPadding: 3 },
+        headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        didParseCell: (d) => {
+          const algoRow = algorithm === 'greedy' ? 1 : algorithm === 'pairing' ? 2 : 3;
+          if (d.section === 'body' && d.row.index === algoRow) {
+            d.cell.styles.fontStyle = 'bold'; d.cell.styles.textColor = [15, 58, 95];
+          }
+        },
+      });
+      y = doc.lastAutoTable.finalY + 8;
+      y = secHead('Input Data Summary', y);
+      const ps = parseData?.summary ?? {};
+      doc.autoTable({
+        startY: y,
+        head: [['Metric', 'Value']],
+        body: [
+          ['Total trips',        ps.total_trips ?? '—'],
+          ['Unique routes',      ps.unique_routes ?? '—'],
+          ['Pickup trips',       ps.pickup_trips ?? '—'],
+          ['Drop trips',         ps.drop_trips ?? '—'],
+          ['Total route KM/day', ps.total_route_km ? `${ps.total_route_km.toLocaleString()} km` : '—'],
+          ['Seat classes',       ps.seat_classes?.join(', ') + ' seats' ?? '—'],
+        ],
+        margin: { left: ML, right: W / 2 + 5 },
+        styles: { fontSize: 9, cellPadding: 3 },
+        headStyles: { fillColor: [59, 130, 246], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+      });
+      footer();
+
+      // ── PAGE 3+: BUS SCHEDULE GANTT (drawn programmatically) ──────────────
+      np();
+      y = MT;
+      y = secHead(`Bus Schedule Gantt — ${algoLabel}`, y);
+
+      // Legend
+      [['#3b82f6','Pickup'],[' #10b981','Drop'],['#f59e0b','Charging']].forEach(([hex, label], i) => {
+        const [r,g,b] = hex.trim().replace('#','').match(/.{2}/g).map(x => parseInt(x,16));
+        doc.setFillColor(r, g, b);
+        doc.roundedRect(ML + i * 35, y, 5, 3, 0.5, 0.5, 'F');
+        doc.setFontSize(7.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 116, 139);
+        doc.text(label, ML + i * 35 + 6.5, y + 2.5);
+      });
+      y += 7;
+
+      const T_MIN = 480, T_MAX = 1320;
+      const GL = ML + 14, GR = W - MR - 12, GW = GR - GL;
+      const ROW_H = 4.8;
+      const tX = (min) => GL + ((Math.min(Math.max(min, T_MIN), T_MAX) - T_MIN) / (T_MAX - T_MIN)) * GW;
+
+      function drawAxis(ay) {
+        doc.setFontSize(6.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(148, 163, 184);
+        for (let h = 8; h <= 22; h += 2)
+          doc.text(`${String(h).padStart(2,'0')}:00`, tX(h * 60), ay, { align: 'center' });
+        doc.setDrawColor(226, 232, 240); doc.setLineWidth(0.2);
+        doc.line(GL, ay + 3, GR, ay + 3);
+        return ay + 5.5;
+      }
+
+      y = drawAxis(y);
+      const buses = algo.buses;
+
+      for (let bi = 0; bi < buses.length; bi++) {
+        if (y + ROW_H > H - 14) { footer(); np(); y = MT + 2; y = drawAxis(y); }
+        const bus = buses[bi];
+        const ry  = y;
+        y += ROW_H;
+
+        // Row background
+        if (bi % 2 === 0) { doc.setFillColor(248, 250, 252); doc.rect(GL, ry, GW, ROW_H - 0.3, 'F'); }
+
+        // Grid lines
+        doc.setDrawColor(241, 245, 249); doc.setLineWidth(0.1);
+        for (let h = 8; h <= 22; h++) doc.line(tX(h * 60), ry, tX(h * 60), ry + ROW_H - 0.3);
+
+        // Bus label
+        doc.setFontSize(5.8); doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 116, 139);
+        doc.text(`B${bus.bus_id}`, GL - 1.5, ry + ROW_H / 2 + 1, { align: 'right' });
+
+        // Trip bars
+        bus.legs.forEach(leg => {
+          const x1 = tX(leg.start_min), x2 = tX(leg.end_min), bw = Math.max(0.3, x2 - x1);
+          if (leg.trip_type === 'pickup')    doc.setFillColor(59, 130, 246);
+          else if (leg.trip_type === 'drop') doc.setFillColor(16, 185, 129);
+          else                               doc.setFillColor(148, 163, 184);
+          doc.roundedRect(x1, ry + 0.7, bw, ROW_H - 1.7, 0.5, 0.5, 'F');
+          if (leg.charge_start) {
+            const cx1 = tX(leg.charge_start), cx2 = tX(leg.charge_end);
+            doc.setFillColor(245, 158, 11);
+            doc.roundedRect(cx1, ry + 0.7, Math.max(0.3, cx2 - cx1), ROW_H - 1.7, 0.3, 0.3, 'F');
+          }
+        });
+
+        // KM label
+        doc.setFontSize(5.8); doc.setTextColor(148, 163, 184);
+        doc.text(`${bus.run_km}km`, GR + 1.5, ry + ROW_H / 2 + 1);
+      }
+      footer();
+
+      // ── PAGE N: DETAILED BUS TABLE ─────────────────────────────────────────
+      np();
+      y = MT;
+      y = secHead('Detailed Bus Assignment Table', y);
+      doc.autoTable({
+        startY: y,
+        head: [['Bus #', 'Legs', 'Routes covered', 'Start', 'End', 'Run KM', 'Seats']],
+        body: buses.map(bus => [
+          `Bus ${bus.bus_id}`,
+          bus.leg_count,
+          bus.legs.map(l => l.route_name?.split(/[-–]/)[0]?.trim()).filter((v,i,a) => a.indexOf(v)===i).slice(0,3).join(', '),
+          bus.legs[0]?.start_time ?? '—',
+          bus.legs[bus.legs.length - 1]?.end_time ?? '—',
+          `${bus.run_km} km`,
+          `${bus.seats}`,
+        ]),
+        margin: { left: ML, right: MR },
+        styles: { fontSize: 8, cellPadding: 2.5 },
+        headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        columnStyles: { 0: { fontStyle: 'bold', textColor: [15, 58, 95] }, 2: { cellWidth: 65 } },
+        didDrawPage: (d) => { if (d.pageNumber > 1) { pageNum++; footer(); } },
+      });
+      footer();
+
+      // ── PAGE N+1: CHARGING STRATEGY ────────────────────────────────────────
+      const sc = results[algorithm]?.strategy_comparison;
+      if (sc) {
+        np();
+        y = MT;
+        y = secHead('EV Charging Strategy Analysis', y);
+        const { full_charge: fc, opportunity: opp } = sc;
+        doc.autoTable({
+          startY: y,
+          head: [['Metric', 'Full Charge', 'Opportunity Charging', 'Better option']],
+          body: [
+            ['Charge events / day',  fc.charge_events,          opp.charge_events,          fc.charge_events <= opp.charge_events ? '✓ Full Charge' : '✓ Opportunity'],
+            ['Dead km / day',        `${fc.dead_km_per_day} km`,  `${opp.dead_km_per_day} km`,  fc.dead_km_per_day <= opp.dead_km_per_day ? '✓ Full Charge' : '✓ Opportunity'],
+            ['Total charge time',    `${Math.round(fc.total_charge_min/60)} hrs`, `${Math.round(opp.total_charge_min/60)} hrs`, fc.total_charge_min <= opp.total_charge_min ? '✓ Full Charge' : '✓ Opportunity'],
+            ['Peak chargers needed', fc.peak_chargers_needed,    opp.peak_chargers_needed,   fc.peak_chargers_needed <= opp.peak_chargers_needed ? '✓ Full Charge' : '✓ Opportunity'],
+          ],
+          margin: { left: ML, right: MR },
+          styles: { fontSize: 9, cellPadding: 3 },
+          headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
+          alternateRowStyles: { fillColor: [248, 250, 252] },
+          columnStyles: { 1: { halign: 'center' }, 2: { halign: 'center' }, 3: { halign: 'center', fontStyle: 'bold', textColor: [22, 163, 74] } },
+        });
+        footer();
+      }
+
+      // ── PAGE N+2: ROUTE NETWORK GRAPH (html2canvas) ────────────────────────
+      if (networkRef.current) {
+        np();
+        y = MT;
+        y = secHead('Route Network Graph', y);
+        try {
+          const canvas = await html2canvas(networkRef.current, { scale: 1.5, backgroundColor: '#ffffff', logging: false, useCORS: true });
+          const imgData = canvas.toDataURL('image/jpeg', 0.85);
+          const imgH    = (canvas.height / canvas.width) * CW;
+          const finalH  = Math.min(imgH, H - y - 20);
+          const finalW  = (finalH / imgH) * CW;
+          doc.addImage(imgData, 'JPEG', ML + (CW - finalW) / 2, y, finalW, finalH);
+        } catch { /* skip silently */ }
+        footer();
+      }
+
+      const fname = `FleetOS_${(name || 'Report').replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.pdf`;
+      doc.save(fname);
+      setShowReportModal(false);
+    } catch (err) {
+      console.error('PDF error:', err);
+    }
+    setPdfLoading(false);
   }
 
   function createExcelFromRows(rows) {
@@ -798,11 +1094,22 @@ export default function TripPlanner() {
           </p>
         </div>
         {step !== 'upload' && (
-          <button onClick={reset}
-            className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200
-              rounded-lg text-slate-500 hover:text-slate-700 text-sm shadow-sm transition-colors">
-            <RotateCcw size={13} /> Start over
-          </button>
+          <div className="flex items-center gap-2">
+            {step === 'results' && (
+              <button
+                onClick={() => setShowReportModal(true)}
+                className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700
+                  text-white rounded-lg text-sm font-medium shadow-sm transition-colors"
+              >
+                <Download size={13} /> Download Report
+              </button>
+            )}
+            <button onClick={reset}
+              className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200
+                rounded-lg text-slate-500 hover:text-slate-700 text-sm shadow-sm transition-colors">
+              <RotateCcw size={13} /> Start over
+            </button>
+          </div>
         )}
       </div>
 
@@ -1134,6 +1441,50 @@ export default function TripPlanner() {
         </div>
       )}
 
+      {/* ── Report modal ── */}
+      {showReportModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[9999] p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-slate-800 font-bold text-lg">Download Fleet Report</h2>
+              <button onClick={() => setShowReportModal(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+            <p className="text-slate-400 text-xs mb-4">
+              PDF includes cover page, Gantt chart, bus schedule, charging strategy tradeoff &amp; route network graph.
+            </p>
+            <label className="text-xs text-slate-500 block mb-1">Client / Company name</label>
+            <input
+              value={clientName}
+              onChange={e => setClientName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && !pdfLoading && generatePDF(clientName)}
+              placeholder="e.g. Microsoft India"
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm mb-4
+                focus:outline-none focus:ring-2 focus:ring-blue-300"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowReportModal(false)}
+                className="flex-1 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-500 text-sm hover:bg-slate-100 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => generatePDF(clientName)}
+                disabled={pdfLoading}
+                className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium
+                  hover:bg-blue-700 disabled:opacity-60 flex items-center justify-center gap-2 transition-colors"
+              >
+                {pdfLoading
+                  ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Generating…</>
+                  : <><Download size={14} /> Download PDF</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── STEP 3: Results ── */}
       {step === 'results' && results && (
         <div className="flex flex-col gap-5">
@@ -1221,10 +1572,14 @@ export default function TripPlanner() {
           </div>
 
           {/* Route network graph */}
-          <TripNetworkGraph buses={results[algorithm].buses} />
+          <div ref={networkRef}>
+            <TripNetworkGraph buses={results[algorithm].buses} />
+          </div>
 
           {/* Gantt */}
-          <BusGantt buses={results[algorithm].buses} />
+          <div ref={ganttRef}>
+            <BusGantt buses={results[algorithm].buses} />
+          </div>
 
           {/* Bus list detail — paginated */}
           {(() => {
