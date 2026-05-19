@@ -496,6 +496,14 @@ export default function SafeSchool({ buses, fetchStudents }) {
   const [busProgress,     setBusProgress]     = useState([0.12, 0.45, 0.71]);
   const [broadcastMsg,    setBroadcastMsg]    = useState('Bus is running 10 minutes late due to traffic near Shivajinagar.');
   const [broadcastSent,   setBroadcastSent]   = useState(false);
+  const [incidentLog,     setIncidentLog]     = useState([
+    { time: '07:38', bus: 'MH12-CD-5678', type: 'RFID Scan',       detail: 'Ananya Joshi boarded at Yerwada',             severity: 'ok'      },
+    { time: '07:42', bus: 'MH12-AB-1234', type: 'RFID Scan',       detail: 'Arjun Mehta boarded at Aundh',                severity: 'ok'      },
+    { time: '07:45', bus: 'MH12-EF-9012', type: 'RFID Scan',       detail: 'Sneha Kulkarni boarded at Kothrud',           severity: 'ok'      },
+    { time: '07:51', bus: 'MH12-AB-1234', type: 'Speed Alert',     detail: 'Bus exceeded 65 km/h on Aundh–Wakad stretch', severity: 'warning' },
+    { time: '07:55', bus: 'MH12-CD-5678', type: 'Absent Flag',     detail: 'Kabir Singh not boarded at Nagar Road stop',  severity: 'alert'   },
+    { time: '08:02', bus: 'MH12-AB-1234', type: 'Manual Override', detail: 'Rohan Desai manually confirmed by driver',    severity: 'warning' },
+  ]);
 
   useEffect(() => {
     fetchStudents().then(data => { setStudents(data); setLoading(false); });
@@ -519,30 +527,31 @@ export default function SafeSchool({ buses, fetchStudents }) {
     setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 4000);
   }
 
+  function addIncident({ type, detail, severity, busId = '—' }) {
+    const time = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    setIncidentLog(prev => [{ time, bus: busId, type, detail, severity, isNew: true }, ...prev]);
+  }
+
   function handleRFIDScan(student) {
+    const now = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
     setStudents(prev => prev.map(s =>
       s.id === student.id
-        ? { ...s, status: 'boarded', boardingTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }), isManual: false }
+        ? { ...s, status: 'boarded', boardingTime: now, isManual: false }
         : s
     ));
-    addToast({
-      type: 'success',
-      title: `${student.name} boarded`,
-      message: `RFID scan confirmed · ${student.stop}`,
-    });
+    addToast({ type: 'success', title: `${student.name} boarded`, message: `RFID scan confirmed · ${student.stop}` });
+    addIncident({ type: 'RFID Scan', detail: `${student.name} boarded at ${student.stop}`, severity: 'ok', busId: student.busId });
   }
 
   function handleManualOverride(student) {
+    const now = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
     setStudents(prev => prev.map(s =>
       s.id === student.id
-        ? { ...s, status: 'boarded', boardingTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }), isManual: true }
+        ? { ...s, status: 'boarded', boardingTime: now, isManual: true }
         : s
     ));
-    addToast({
-      type: 'warning',
-      title: `${student.name} — Manual Override`,
-      message: 'Boarded manually confirmed by driver · Logged for review',
-    });
+    addToast({ type: 'warning', title: `${student.name} — Manual Override`, message: 'Boarded manually · Logged for review' });
+    addIncident({ type: 'Manual Override', detail: `${student.name} manually confirmed by driver`, severity: 'warning', busId: student.busId });
   }
 
   function handleCallLog(log) {
@@ -553,38 +562,43 @@ export default function SafeSchool({ buses, fetchStudents }) {
         title: log.type === 'sms' ? 'SMS sent to parent' : 'Call connected',
         message: `Logged against ${callStudent?.name}'s incident`,
       });
+      addIncident({
+        type: log.type === 'sms' ? 'SMS Sent' : 'Parent Called',
+        detail: `${log.type === 'sms' ? 'SMS sent to' : 'Call answered by'} ${log.parent}`,
+        severity: 'ok',
+        busId: callStudent?.busId ?? '—',
+      });
+    } else if (log.outcome === 'no_answer') {
+      addIncident({
+        type: 'No Answer',
+        detail: `${log.parent} did not pick up — awaiting callback`,
+        severity: 'warning',
+        busId: callStudent?.busId ?? '—',
+      });
     }
   }
 
   function handleFlagDriver(busId) {
     if (!flaggedDrivers.includes(busId)) {
       setFlaggedDrivers(prev => [...prev, busId]);
-      addToast({
-        type: 'warning',
-        title: 'Driver flagged for review',
-        message: `${buses.find(b => b.busId === busId)?.driverName} flagged · Admin notified`,
-      });
+      const driver = buses.find(b => b.busId === busId)?.driverName ?? 'Driver';
+      addToast({ type: 'warning', title: 'Driver flagged for review', message: `${driver} flagged · Admin notified` });
+      addIncident({ type: 'Driver Flagged', detail: `${driver} flagged for conduct review`, severity: 'warning', busId });
     }
   }
 
   function handleBroadcast() {
     if (!broadcastMsg.trim()) return;
     const preview = broadcastMsg.length > 55 ? broadcastMsg.slice(0, 55) + '…' : broadcastMsg;
-    addToast({
-      type: 'success',
-      title: `Broadcast sent to ${total} parents`,
-      message: `"${preview}"`,
-    });
+    addToast({ type: 'success', title: `Broadcast sent to ${total} parents`, message: `"${preview}"` });
+    addIncident({ type: 'Broadcast', detail: `Message sent to all parents: "${preview}"`, severity: 'ok', busId: 'ALL' });
     setBroadcastSent(true);
     setTimeout(() => setBroadcastSent(false), 3500);
   }
 
   function triggerDeviation(bus) {
-    addToast({
-      type: 'alert',
-      title: 'Route Deviation Alert',
-      message: `${bus.busId} has left the planned route corridor`,
-    });
+    addToast({ type: 'alert', title: 'Route Deviation Alert', message: `${bus.busId} has left the planned route corridor` });
+    addIncident({ type: 'Route Deviation', detail: `${bus.busId} left planned route corridor`, severity: 'alert', busId: bus.busId });
   }
 
   const boarded  = students.filter(s => s.status === 'boarded').length;
@@ -977,19 +991,16 @@ export default function SafeSchool({ buses, fetchStudents }) {
 
       {/* Incident log */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-        <div className="px-5 py-3 border-b border-slate-200">
+        <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
           <p className="text-slate-700 text-sm font-semibold">Today's Incident Log</p>
+          <span className="text-slate-400 text-xs">{incidentLog.length} events</span>
         </div>
         <div className="divide-y divide-slate-100">
-          {[
-            { time: '07:38', bus: 'MH12-CD-5678', type: 'RFID Scan',       detail: 'Ananya Joshi boarded at Yerwada',                severity: 'ok'     },
-            { time: '07:42', bus: 'MH12-AB-1234', type: 'RFID Scan',       detail: 'Arjun Mehta boarded at Aundh',                   severity: 'ok'     },
-            { time: '07:45', bus: 'MH12-EF-9012', type: 'RFID Scan',       detail: 'Sneha Kulkarni boarded at Kothrud',              severity: 'ok'     },
-            { time: '07:51', bus: 'MH12-AB-1234', type: 'Speed Alert',     detail: 'Bus exceeded 65 km/h on Aundh–Wakad stretch',    severity: 'warning'},
-            { time: '07:55', bus: 'MH12-CD-5678', type: 'Absent Flag',     detail: 'Kabir Singh not boarded at Nagar Road stop',    severity: 'alert'  },
-            { time: '08:02', bus: 'MH12-AB-1234', type: 'Manual Override', detail: 'Rohan Desai manually confirmed by driver',       severity: 'warning'},
-          ].map((log, i) => (
-            <div key={i} className="flex items-center gap-4 px-5 py-3 text-xs hover:bg-slate-50 transition-colors">
+          {incidentLog.map((log, i) => (
+            <div key={i} className={cn(
+              'flex items-center gap-4 px-5 py-3 text-xs hover:bg-slate-50 transition-colors',
+              log.isNew && 'bg-blue-50/60 border-l-2 border-blue-400'
+            )}>
               <span className="text-slate-400 w-12 flex-shrink-0">{log.time}</span>
               <span className="text-slate-500 w-24 flex-shrink-0 truncate">{log.bus}</span>
               <span className={cn(
