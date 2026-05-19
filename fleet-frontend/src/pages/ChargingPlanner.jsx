@@ -896,7 +896,11 @@ export default function ChargingPlanner() {
         {/* Unified tooltip — fixed positioning escapes table overflow */}
         {infoTip && (() => {
           const pos = infoTip.rect;
-          const tipTop  = pos.bottom + 8;
+          // Flip tooltip above the cell when too close to viewport bottom
+          const APPROX_H = infoTip.which === 'saved-row' ? 148 : 130;
+          const tipTop = pos.bottom + 8 + APPROX_H > window.innerHeight
+            ? pos.top - APPROX_H - 8
+            : pos.bottom + 8;
 
           /* ── Header ⓘ: general formula explanation ── */
           if (infoTip.which === 'cost' || infoTip.which === 'saved') {
