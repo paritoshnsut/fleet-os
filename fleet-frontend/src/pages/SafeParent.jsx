@@ -1,4 +1,7 @@
 import { useState, useEffect } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, CircleMarker } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import {
   CheckCircle, Clock, AlertTriangle, User, Users,
   Bell, X, Send, Bus, MapPin,
@@ -7,6 +10,59 @@ import { cn } from '../lib/utils';
 import { supabase } from '../lib/supabase';
 import { subscribeToBroadcasts, subscribeToBoardingState } from '../lib/safeRideStore';
 import { raiseSOS, subscribeToSOS } from '../lib/sosStore';
+
+const ROUTE_PATHS = [
+  { color: '#3b82f6', stops: [
+    { pos: [18.5016, 73.8568], name: 'Swargate' }, { pos: [18.5162, 73.8419], name: 'Deccan' },
+    { pos: [18.5437, 73.8183], name: 'Aundh' },    { pos: [18.5623, 73.7802], name: 'Wakad' },
+    { pos: [18.5910, 73.7210], name: 'Hinjewadi' },
+  ]},
+  { color: '#10b981', stops: [
+    { pos: [18.4522, 73.8614], name: 'Katraj' },      { pos: [18.4818, 73.8636], name: 'Market Yard' },
+    { pos: [18.5200, 73.8567], name: 'Pune Station' }, { pos: [18.5424, 73.9009], name: 'Nagar Road' },
+    { pos: [18.5731, 73.9064], name: 'Vishrantwadi' },
+  ]},
+  { color: '#8b5cf6', stops: [
+    { pos: [18.5070, 73.8143], name: 'Kothrud' },     { pos: [18.5122, 73.8320], name: 'Karve Road' },
+    { pos: [18.5204, 73.8560], name: 'Shivajinagar' }, { pos: [18.4980, 73.8950], name: 'Wanowrie' },
+    { pos: [18.5090, 73.9261], name: 'Hadapsar' },
+  ]},
+  { color: '#f59e0b', stops: [
+    { pos: [18.6298, 73.7997], name: 'Pimpri' },   { pos: [18.5890, 73.7761], name: 'Chinchwad' },
+    { pos: [18.5522, 73.8019], name: 'Bopodi' },   { pos: [18.5310, 73.8446], name: 'Shivajinagar' },
+    { pos: [18.5204, 73.8567], name: 'Pune Station' },
+  ]},
+  { color: '#ef4444', stops: [
+    { pos: [18.5590, 73.9070], name: 'Wagholi' },  { pos: [18.5490, 73.8990], name: 'Kharadi' },
+    { pos: [18.5424, 73.9009], name: 'Nagar Road' }, { pos: [18.5300, 73.8700], name: 'Yerwada' },
+    { pos: [18.5204, 73.8567], name: 'Pune Station' },
+  ]},
+];
+
+function interpolate(stops, progress) {
+  const N = stops.length;
+  if (N < 2) return stops[0]?.pos ?? [18.52, 73.85];
+  const c = Math.min(Math.max(progress, 0), 0.9999);
+  const i = Math.min(Math.floor(c * (N - 1)), N - 2);
+  const f = c * (N - 1) - i;
+  const [la1, ln1] = stops[i].pos;
+  const [la2, ln2] = stops[i + 1].pos;
+  return [la1 + (la2 - la1) * f, ln1 + (ln2 - ln1) * f];
+}
+
+function createBusMarker(color, highlighted) {
+  const size = highlighted ? 38 : 28;
+  return L.divIcon({
+    html: `<div style="width:${size}px;height:${size}px;border-radius:50%;
+      background:${color}22;border:${highlighted ? 3 : 2}px solid ${color};
+      display:flex;align-items:center;justify-content:center;font-size:${highlighted ? 17 : 13}px;
+      box-shadow:${highlighted ? `0 0 16px ${color}66` : 'none'};">🚌</div>`,
+    className: '',
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+    popupAnchor: [0, -size / 2 - 4],
+  });
+}
 
 // ── Status card ───────────────────────────────────────────────────────────────
 function StatusCard({ student, boardingStatus, boardingTime }) {
@@ -65,11 +121,15 @@ function BroadcastBanner({ broadcasts, onDismiss }) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 export default function SafeParent() {
   const [students,      setStudents]      = useState([]);
+  const [buses,         setBuses]         = useState([]);
   const [selectedChild, setSelectedChild] = useState(null);
   const [boardingState, setBoardingState] = useState({});
   const [broadcasts,    setBroadcasts]    = useState([]);
   const [showBroadcast, setShowBroadcast] = useState(true);
   const [loading,       setLoading]       = useState(true);
+  const [busProgress,   setBusProgress]   = useState(
+    Array.from({ length: 5 }, () => Math.random() * 0.4)
+  );
 
   // SOS state
   const [sosOpen,   setSosOpen]   = useState(false);
@@ -77,22 +137,45 @@ export default function SafeParent() {
   const [sosMsg,    setSosMsg]    = useState('');
   const [sosAlerts, setSosAlerts] = useState([]);
 
-  // Load students from Supabase (any school's students for demo)
+  // Load students + buses from Supabase
   useEffect(() => {
     async function load() {
       setLoading(true);
-      const { data } = await supabase
+      const { data: sData } = await supabase
         .from('saferide_students')
-        .select('*, fleet_buses(bus_number)')
+        .select('*, fleet_buses(id, bus_number)')
         .eq('is_active', true)
         .order('created_at')
         .limit(20);
-      const list = data ?? [];
+      const list = sData ?? [];
       setStudents(list);
       if (list.length > 0) setSelectedChild(list[0]);
+
+      // Collect unique bus IDs to load buses for map
+      const busIds = [...new Set(list.map(s => s.bus_id).filter(Boolean))];
+      if (busIds.length > 0) {
+        const { data: bData } = await supabase
+          .from('fleet_buses')
+          .select('id, bus_number, fuel_type, seats')
+          .in('id', busIds)
+          .eq('is_active', true)
+          .order('bus_number');
+        setBuses(bData ?? []);
+      }
       setLoading(false);
     }
     load();
+  }, []);
+
+  // Animate buses along routes
+  useEffect(() => {
+    const id = setInterval(() => {
+      setBusProgress(prev => prev.map(p => {
+        const next = p + 0.006;
+        return next >= 1 ? 0 : next;
+      }));
+    }, 2000);
+    return () => clearInterval(id);
   }, []);
 
   useEffect(() => subscribeToBoardingState(state => setBoardingState(state)), []);
@@ -197,6 +280,49 @@ export default function SafeParent() {
           boardingTime={childBoardingTime}
         />
       )}
+
+      {/* Live map */}
+      <div className="rounded-2xl overflow-hidden border border-slate-200 shadow-sm" style={{ height: 320 }}>
+        <MapContainer center={[18.5204, 73.8567]} zoom={12} style={{ width: '100%', height: '100%' }}>
+          <TileLayer
+            url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+            attribution="&copy; CARTO"
+          />
+          {ROUTE_PATHS.flatMap((route, ri) => [
+            <Polyline key={`line-${ri}`}
+              positions={route.stops.map(s => s.pos)}
+              pathOptions={{ color: route.color, weight: 3, opacity: 0.6, dashArray: '8 5' }}
+            />,
+            ...route.stops.map(stop => (
+              <CircleMarker key={`stop-${ri}-${stop.name}`}
+                center={stop.pos} radius={4}
+                pathOptions={{ color: '#fff', fillColor: route.color, fillOpacity: 1, weight: 2 }}>
+                <Popup><span style={{ fontSize: 12, fontWeight: 600 }}>{stop.name}</span></Popup>
+              </CircleMarker>
+            )),
+          ])}
+          {buses.map((bus, idx) => {
+            const route       = ROUTE_PATHS[idx % ROUTE_PATHS.length];
+            const pos         = interpolate(route.stops, busProgress[idx] ?? 0);
+            const isMyBus     = bus.id === selectedChild?.bus_id;
+            return (
+              <Marker key={bus.id} position={pos}
+                icon={createBusMarker(route.color, isMyBus)}>
+                <Popup>
+                  <div style={{ minWidth: 140, color: '#1e293b' }}>
+                    <p style={{ fontWeight: 700, marginBottom: 4 }}>{bus.bus_number}</p>
+                    {isMyBus && (
+                      <p style={{ fontSize: 11, color: '#16a34a', fontWeight: 600 }}>
+                        ← {selectedChild?.name?.split(' ')[0]}'s bus
+                      </p>
+                    )}
+                  </div>
+                </Popup>
+              </Marker>
+            );
+          })}
+        </MapContainer>
+      </div>
 
       {/* Child info */}
       {selectedChild && (
@@ -314,6 +440,17 @@ export default function SafeParent() {
           </button>
         )}
       </div>
+
+      <style>{`
+        .leaflet-popup-content-wrapper {
+          background: white !important; border: 1px solid #e2e8f0 !important;
+          border-radius: 12px !important; padding: 0 !important;
+          box-shadow: 0 4px 16px rgba(0,0,0,0.08) !important;
+        }
+        .leaflet-popup-content { margin: 12px !important; }
+        .leaflet-popup-tip { background: white !important; }
+        .leaflet-control-attribution { font-size: 9px !important; }
+      `}</style>
     </div>
   );
 }

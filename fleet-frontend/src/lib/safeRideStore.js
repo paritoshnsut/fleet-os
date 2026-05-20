@@ -80,6 +80,20 @@ export function resetSimulation() {
   _emitIncidents();
 }
 
+export function manualBoard(studentId, name, busNumber) {
+  const t = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  _boardingState = { ..._boardingState, [studentId]: { status: 'boarded', time: t, isManual: true } };
+  _emitBoarding();
+  _addIncident({ id: Date.now(), severity: 'warning', type: 'Manual Mark', detail: `${name} marked attended manually`, time: t, bus: busNumber ?? '—' });
+}
+
+export function markAbsent(studentId, name, busNumber) {
+  const t = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  _boardingState = { ..._boardingState, [studentId]: { status: 'absent', time: t } };
+  _emitBoarding();
+  _addIncident({ id: Date.now(), severity: 'alert', type: 'Absent', detail: `${name} marked absent`, time: t, bus: busNumber ?? '—' });
+}
+
 export function subscribeToBoardingState(fn) {
   _simListeners.push(fn);
   fn({ ..._boardingState }, _simRunning);
