@@ -1,5 +1,8 @@
 import { Wifi, WifiOff, AlertTriangle } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useAuth } from '../contexts/AuthContext';
+
+const FLEET_ALERT_ROLES = new Set(['admin', 'fleet_operator']);
 
 function timeAgo(date) {
   const mins = Math.floor((Date.now() - new Date(date)) / 60000);
@@ -9,6 +12,8 @@ function timeAgo(date) {
 }
 
 export default function TopBar({ connected, wsAccum = [], activePage }) {
+  const { profile } = useAuth();
+  const showAlerts = FLEET_ALERT_ROLES.has(profile?.role);
   const pageLabels = {
     'fleet-map':     'Fleet Intelligence — Live Map',
     'fleet-drivers': 'Fleet Intelligence — Driver Scorecards',
@@ -39,8 +44,8 @@ export default function TopBar({ connected, wsAccum = [], activePage }) {
 
       {/* Right controls */}
       <div className="flex items-center gap-4">
-        {/* Latest alert ticker — synced with Alert Center */}
-        {latest && (
+        {/* Latest alert ticker — fleet operators and admins only */}
+        {showAlerts && latest && (
           <div className={cn(
             'hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs',
             latest.severity === 'high'
