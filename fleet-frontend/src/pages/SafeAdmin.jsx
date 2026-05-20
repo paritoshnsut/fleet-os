@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { subscribeToSOS, replyToAlert, resolveSOSAlert } from '../lib/sosStore';
 import {
   Shield, AlertTriangle, CheckCircle, Users, Bell, Phone,
   Clock, XCircle, Activity, MessageSquare, Flag, Bus,
@@ -158,6 +159,24 @@ export default function SafeAdmin({ buses, fetchStudents }) {
     fetchStudents().then(setStudents).catch(() => {});
   }, []);
 
+  // Subscribe to live SOS alerts raised from SafeParent
+  useEffect(() => {
+    const unsub = subscribeToSOS(liveAlerts => {
+      if (liveAlerts.length === 0) return;
+      setParentAlerts(prev => {
+        const existingIds = new Set(prev.map(a => a.id));
+        const incoming = liveAlerts.filter(a => !existingIds.has(a.id));
+        // Also sync status/thread updates for already-known SOS alerts
+        const merged = prev.map(a => {
+          const live = liveAlerts.find(l => l.id === a.id);
+          return live ? { ...a, status: live.status, thread: live.thread } : a;
+        });
+        return incoming.length > 0 ? [...incoming, ...merged] : merged;
+      });
+    });
+    return unsub;
+  }, []);
+
   // Drip in simulated live events every 12 seconds
   useEffect(() => {
     let i = 0;
@@ -187,7 +206,9 @@ export default function SafeAdmin({ buses, fetchStudents }) {
   }
 
   function resolveAlert(id) {
+    const alert = parentAlerts.find(a => a.id === id);
     setParentAlerts(prev => prev.map(a => a.id === id ? { ...a, status: 'resolved' } : a));
+    if (alert?._isSOS) resolveSOSAlert(id);
     addToast({ type: 'success', title: 'Alert resolved', message: 'Parent will receive SMS confirmation' });
   }
 
@@ -199,15 +220,18 @@ export default function SafeAdmin({ buses, fetchStudents }) {
 
   function sendReply(alertId) {
     if (!replyText.trim()) return;
-    const time = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    const time  = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    const reply = { from: 'Admin', text: replyText, time };
+    const alert = parentAlerts.find(a => a.id === alertId);
     setParentAlerts(prev => prev.map(a =>
       a.id === alertId
-        ? { ...a, status: 'in_progress', thread: [...a.thread, { from: 'Admin', text: replyText, time }] }
+        ? { ...a, status: 'in_progress', thread: [...a.thread, reply] }
         : a
     ));
-    addFeedEvent({ bus: parentAlerts.find(a => a.id === alertId)?.busId ?? '—', type: 'broadcast', msg: `Admin replied to parent alert ${alertId}`, sev: 'ok' });
+    if (alert?._isSOS) replyToAlert(alertId, reply);
+    addFeedEvent({ bus: alert?.busId ?? '—', type: 'broadcast', msg: `Admin replied to ${alert?._isSOS ? 'SOS' : 'parent'} alert`, sev: 'ok' });
     setReplyText('');
-    addToast({ type: 'success', title: 'Reply sent', message: 'Parent will receive SMS notification' });
+    addToast({ type: 'success', title: 'Reply sent', message: alert?._isSOS ? 'Parent can see your reply live' : 'Parent will receive SMS notification' });
   }
 
   function triggerEmergency(busId) {
