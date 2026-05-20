@@ -59,6 +59,15 @@ function AppShell() {
   const defaultPage = profile ? (ROLE_HOME[profile.role] ?? 'fleet-map') : 'fleet-map';
   const [activePage, setActivePage] = useState(defaultPage);
 
+  // When profile first loads (async after session), jump to the correct home page
+  const initialPageSet = useRef(false);
+  useEffect(() => {
+    if (profile && !initialPageSet.current) {
+      initialPageSet.current = true;
+      setActivePage(ROLE_HOME[profile.role] ?? 'fleet-map');
+    }
+  }, [profile]);
+
   // Stable WS alert accumulator — lives here so it persists across page navigation
   const [wsAccum,   setWsAccum]   = useState([]);
   const wsSeenRef = useRef(new Set());

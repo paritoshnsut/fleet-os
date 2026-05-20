@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { subscribeToSOS, replyToAlert, resolveSOSAlert } from '../lib/sosStore';
 import {
-  Shield, AlertTriangle, CheckCircle, Users, Bell, Phone,
-  Clock, XCircle, Activity, MessageSquare, Flag, Bus,
-  ChevronRight, Send, Lock, TrendingUp, Navigation,
+  AlertTriangle, CheckCircle, Users, Bell,
+  Activity, MessageSquare, Bus,
+  ChevronRight, Send, Navigation,
   Radio, RefreshCw, AlertOctagon, Edit3,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -76,64 +76,11 @@ const SEV_COLOR = {
   low:      'bg-slate-100 text-slate-500 border-slate-200',
 };
 
-// ── Driver call modal ─────────────────────────────────────────────────────────
-function DriverCallModal({ bus, onClose, onLog }) {
-  const [state, setState] = useState('idle');
-
-  function handleCall() {
-    setState('calling');
-    setTimeout(() => {
-      const ans = Math.random() > 0.3;
-      setState(ans ? 'answered' : 'no_answer');
-      onLog(ans
-        ? `Admin called ${bus.driverName} — call answered`
-        : `Admin called ${bus.driverName} — no answer`
-      );
-    }, 2200);
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[9999] p-4">
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-        <div className="flex items-center justify-between mb-2">
-          <p className="text-slate-800 font-bold">Call Driver</p>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><XCircle size={18} /></button>
-        </div>
-        <p className="text-xs text-slate-400 mb-4">
-          Workflow demo — in production this dials via Twilio. All calls are logged.
-        </p>
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-4">
-          <p className="text-slate-800 font-semibold text-sm">{bus.driverName ?? 'Driver'}</p>
-          <p className="text-slate-500 text-xs">{bus.busId} · {bus.routeName ?? 'Route'}</p>
-          <p className="text-slate-400 text-xs mt-1">••••{String(Math.floor(Math.random()*9000)+1000)}</p>
-        </div>
-        <button
-          onClick={handleCall}
-          disabled={state !== 'idle'}
-          className={cn(
-            'w-full py-2.5 rounded-xl border text-sm font-medium transition-all flex items-center justify-center gap-2',
-            state === 'idle'     ? 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100' :
-            state === 'calling'  ? 'bg-green-100 border-green-200 text-green-700 animate-pulse' :
-            state === 'answered' ? 'bg-green-50 border-green-200 text-green-700' :
-                                   'bg-red-50 border-red-200 text-red-600'
-          )}>
-          <Phone size={14} className={state === 'calling' ? 'animate-bounce' : ''} />
-          {state === 'idle' ? 'Call Driver' : state === 'calling' ? 'Calling…' : state === 'answered' ? '✓ Call Connected' : 'No Answer'}
-        </button>
-        <button onClick={onClose}
-          className="w-full mt-2 py-2 text-slate-400 text-xs hover:text-slate-600 transition-colors">
-          Close
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // ── Feed icon map ─────────────────────────────────────────────────────────────
 const FEED_ICON = {
   rfid:      <CheckCircle size={11} className="text-green-600" />,
   speed:     <AlertTriangle size={11} className="text-amber-500" />,
-  absent:    <XCircle size={11} className="text-red-500" />,
+  absent:    <AlertTriangle size={11} className="text-red-500" />,
   override:  <Edit3 size={11} className="text-blue-500" />,
   broadcast: <Bell size={11} className="text-purple-500" />,
   emergency: <AlertOctagon size={11} className="text-red-600" />,
@@ -151,7 +98,6 @@ export default function SafeAdmin({ buses, fetchStudents }) {
   const [replyText,     setReplyText]     = useState('');
   const [filterTab,     setFilterTab]     = useState('all');
   const [emergencies,   setEmergencies]   = useState(new Set());
-  const [callBus,       setCallBus]       = useState(null);
   const [broadcastMsg,  setBroadcastMsg]  = useState('');
   const [broadcastSent, setBroadcastSent] = useState(false);
 
@@ -209,13 +155,7 @@ export default function SafeAdmin({ buses, fetchStudents }) {
     const alert = parentAlerts.find(a => a.id === id);
     setParentAlerts(prev => prev.map(a => a.id === id ? { ...a, status: 'resolved' } : a));
     if (alert?._isSOS) resolveSOSAlert(id);
-    addToast({ type: 'success', title: 'Alert resolved', message: 'Parent will receive SMS confirmation' });
-  }
-
-  function escalateAlert(id) {
-    setParentAlerts(prev => prev.map(a => a.id === id ? { ...a, status: 'in_progress', escalated: true } : a));
-    addToast({ type: 'warning', title: 'Escalated to management', message: 'Principal and transport head notified' });
-    addFeedEvent({ bus: '—', type: 'override', msg: `Alert ${id} escalated to principal`, sev: 'warning' });
+    addToast({ type: 'success', title: 'Alert resolved', message: 'Parent has been notified in the app' });
   }
 
   function sendReply(alertId) {
@@ -231,7 +171,7 @@ export default function SafeAdmin({ buses, fetchStudents }) {
     if (alert?._isSOS) replyToAlert(alertId, reply);
     addFeedEvent({ bus: alert?.busId ?? '—', type: 'broadcast', msg: `Admin replied to ${alert?._isSOS ? 'SOS' : 'parent'} alert`, sev: 'ok' });
     setReplyText('');
-    addToast({ type: 'success', title: 'Reply sent', message: alert?._isSOS ? 'Parent can see your reply live' : 'Parent will receive SMS notification' });
+    addToast({ type: 'success', title: 'Reply sent', message: 'Parent can see your reply in the app' });
   }
 
   function triggerEmergency(busId) {
@@ -282,15 +222,6 @@ export default function SafeAdmin({ buses, fetchStudents }) {
           </div>
         ))}
       </div>
-
-      {/* Driver call modal */}
-      {callBus && (
-        <DriverCallModal
-          bus={callBus}
-          onClose={() => setCallBus(null)}
-          onLog={msg => addFeedEvent({ bus: callBus.busId, type: 'rfid', msg, sev: 'ok' })}
-        />
-      )}
 
       {/* Header */}
       <div className="flex items-start justify-between">
@@ -463,28 +394,6 @@ export default function SafeAdmin({ buses, fetchStudents }) {
 
                       {/* Action row */}
                       <div className="flex flex-wrap gap-2">
-                        <button
-                          onClick={() => setCallBus(buses.find(b => b.busId === alert.busId) ?? { busId: alert.busId, driverName: alert.parent })}
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200
-                            rounded-lg text-slate-600 text-xs hover:bg-slate-50 transition-colors"
-                        >
-                          <Phone size={11} /> Call Parent
-                        </button>
-                        {!alert.escalated && alert.status !== 'resolved' && (
-                          <button
-                            onClick={() => escalateAlert(alert.id)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 border border-amber-200
-                              rounded-lg text-amber-700 text-xs hover:bg-amber-100 transition-colors"
-                          >
-                            <TrendingUp size={11} /> Escalate to Principal
-                          </button>
-                        )}
-                        {alert.escalated && (
-                          <span className="flex items-center gap-1 px-3 py-1.5 bg-amber-50 border border-amber-200
-                            rounded-lg text-amber-600 text-xs">
-                            <Flag size={11} /> Escalated
-                          </span>
-                        )}
                         {alert.status !== 'resolved' && (
                           <button
                             onClick={() => resolveAlert(alert.id)}
@@ -579,14 +488,6 @@ export default function SafeAdmin({ buses, fetchStudents }) {
                       </div>
                     ) : (
                       <div className="space-y-1.5">
-                        <button
-                          onClick={() => setCallBus(bus)}
-                          className="w-full py-1.5 bg-green-50 border border-green-200
-                            rounded-lg text-green-700 text-xs hover:bg-green-100
-                            transition-colors flex items-center justify-center gap-1.5"
-                        >
-                          <Phone size={11} /> Call Driver
-                        </button>
                         <button
                           onClick={() => sendReroute(bus)}
                           className="w-full py-1.5 bg-blue-50 border border-blue-200

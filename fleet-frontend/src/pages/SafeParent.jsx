@@ -308,6 +308,8 @@ export default function SafeParent({ buses, fetchStudents }) {
     return unsub;
   }, []);
 
+  const [resolveToast, setResolveToast] = useState(false);
+
   function handleMarkAbsent(childId) {
     setAbsentIds(prev => [...prev, childId]);
     setStudents(prev => prev.map(s =>
@@ -346,6 +348,15 @@ export default function SafeParent({ buses, fetchStudents }) {
   // The live SOS alert the parent raised (latest one for this child)
   const myAlert = sosAlerts.find(a => a.student === selectedChild?.name && a._isSOS);
 
+  // Show a prominent toast when admin resolves the parent's SOS
+  useEffect(() => {
+    if (myAlert?.status === 'resolved' && sosActive) {
+      setResolveToast(true);
+      const t = setTimeout(() => setResolveToast(false), 6000);
+      return () => clearTimeout(t);
+    }
+  }, [myAlert?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const timeline = selectedChild ? [
     {
       time: '07:30', title: 'Bus departed depot',
@@ -377,6 +388,18 @@ export default function SafeParent({ buses, fetchStudents }) {
 
   return (
     <div className="flex flex-col gap-5">
+
+      {/* SOS resolved notification */}
+      {resolveToast && (
+        <div className="fixed top-6 right-6 z-[9999] bg-green-50 border border-green-200
+          rounded-xl px-4 py-4 text-green-700 shadow-lg flex items-center gap-3 pointer-events-none">
+          <CheckCircle size={20} className="text-green-600 flex-shrink-0" />
+          <div>
+            <p className="font-bold text-sm">SOS Alert Resolved</p>
+            <p className="text-xs opacity-80">The school admin has resolved your emergency alert.</p>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
 
