@@ -368,7 +368,7 @@ function ComparisonTable({ comparison, summary, selectedAlgo }) {
         sub={savedInr > 0 ? 'vs manual plan · dead-km reduction' : 'No savings vs benchmark'}
         color="orange" highlight={savedInr > 0} />
       */}
-      <MetricCard icon={Activity}     label="Fleet utilization" value={`${algo.utilization}%`}
+      <MetricCard icon={Activity}     label="Fleet utilization" value={`${algo.avg_utilization_pct}%`}
         sub="avg km utilisation per bus · optimised schedule"
         color="purple" highlight />
     </div>
@@ -812,7 +812,7 @@ export default function TripPlanner() {
       [
         { label: 'BUSES NEEDED',     value: String(algo.bus_count),         sub: `saves ${comp.benchmark_buses - algo.bus_count} vs manual` },
         { label: 'RUN KM / DAY',     value: `${algo.total_run_km} km`,      sub: `${parseData?.summary?.total_trips ?? '—'} trips scheduled` },
-        { label: 'FLEET UTILIZATION',value: `${algo.utilization}%`,         sub: 'avg km utilisation per bus' },
+        { label: 'FLEET UTILIZATION',value: `${algo.avg_utilization_pct}%`,  sub: 'avg km utilisation per bus' },
       ].forEach((m, i) => {
         const bx = ML + i * (boxW + 4);
         doc.setFillColor(248, 250, 252); doc.roundedRect(bx, mY, boxW, 28, 3, 3, 'F');
