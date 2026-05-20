@@ -6,7 +6,7 @@ import {
 } from 'recharts';
 import {
   Upload, Info, X, FileSpreadsheet, ChevronDown, ChevronRight,
-  Calculator, TrendingUp, BarChart2, Zap, Download,
+  Calculator, TrendingUp, BarChart2, Zap, Download, SlidersHorizontal,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -269,19 +269,16 @@ const ECP_FACTORS = [
 const EFF_COLS = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5];
 const KM_COLS  = [200, 240, 280, 320, 360, 400, 440, 480, 520, 560, 600];
 
-function calcParityTables(evParams, dslParams) {
-  const baseECP = evParams.ecp;
-  const ecpRows = ECP_FACTORS.map(f => baseECP * f);
-
+function calcParityTables(evParams, dslParams, ecpRows, effCols, kmCols) {
   const dslBase      = buildLifecycle(dslParams);
   const dslBaseEAP   = dslBase.totalEAP;
   const dslBaseRows  = dslBase.eapPerRow;
 
-  const dslByKm = KM_COLS.map(km => buildLifecycle({ ...dslParams, kmPerDay: km }));
+  const dslByKm = kmCols.map(km => buildLifecycle({ ...dslParams, kmPerDay: km }));
 
   const table1 = ecpRows.map(ecp => ({
     ecp,
-    cells: EFF_COLS.map(eff => {
+    cells: effCols.map(eff => {
       const ev = buildLifecycle({ ...evParams, ecp, fuelEfficiency: eff });
       return { diff: ev.totalEAP - dslBaseEAP, evEAP: ev.totalEAP, dslEAP: dslBaseEAP, evRows: ev.eapPerRow, dslRows: dslBaseRows };
     }),
@@ -289,13 +286,13 @@ function calcParityTables(evParams, dslParams) {
 
   const table2 = ecpRows.map(ecp => ({
     ecp,
-    cells: KM_COLS.map((km, j) => {
+    cells: kmCols.map((km, j) => {
       const ev = buildLifecycle({ ...evParams, ecp, kmPerDay: km });
       return { diff: ev.totalEAP - dslByKm[j].totalEAP, evEAP: ev.totalEAP, dslEAP: dslByKm[j].totalEAP, evRows: ev.eapPerRow, dslRows: dslByKm[j].eapPerRow };
     }),
   }));
 
-  return { table1, table2, ecpRows };
+  return { table1, table2, ecpRows, effCols, kmCols };
 }
 
 // ─── Helper Components ────────────────────────────────────────────────────────
@@ -752,6 +749,217 @@ function ParityHeatmap({ title, data, colHeaders, colUnit, currentECPRow, curren
   );
 }
 
+// ─── Parity Control Modal ─────────────────────────────────────────────────────
+
+function ChipTag({ label, onRemove, color = 'blue' }) {
+  const styles = {
+    blue:   'bg-blue-50 border-blue-200 text-blue-700',
+    orange: 'bg-orange-50 border-orange-200 text-orange-700',
+    slate:  'bg-slate-100 border-slate-200 text-slate-600',
+  };
+  return (
+    <span className={cn('inline-flex items-center gap-1 border text-xs font-medium rounded-full px-3 py-1', styles[color])}>
+      {label}
+      {onRemove && (
+        <button onClick={onRemove} className="ml-0.5 opacity-60 hover:opacity-100">
+          <X size={10} />
+        </button>
+      )}
+    </span>
+  );
+}
+
+function AxisSection({ title, subtitle, children }) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <p className="text-sm font-semibold text-slate-700">{title}</p>
+        <p className="text-[11px] text-slate-400 mt-0.5">{subtitle}</p>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ParityControlModal({ ecps, effCols, kmCols, baseECP, onApply, onClose }) {
+  const [localECPs,  setLocalECPs]  = useState(() => ecps.slice().sort((a, b) => a - b));
+  const [localEff,   setLocalEff]   = useState(() => effCols.slice().sort((a, b) => a - b));
+  const [localKm,    setLocalKm]    = useState(() => kmCols.slice().sort((a, b) => a - b));
+  const [newECPLakh, setNewECPLakh] = useState('');
+  const [newEff,     setNewEff]     = useState('');
+  const [newKm,      setNewKm]      = useState('');
+
+  const addSorted = (arr, val) =>
+    arr.includes(val) ? arr : [...arr, val].sort((a, b) => a - b);
+
+  const addECP = () => {
+    const val = Math.round(parseFloat(newECPLakh) * 100000);
+    if (!isNaN(val) && val > 0) { setLocalECPs(prev => addSorted(prev, val)); setNewECPLakh(''); }
+  };
+  const addEff = () => {
+    const val = parseFloat(parseFloat(newEff).toFixed(2));
+    if (!isNaN(val) && val > 0) { setLocalEff(prev => addSorted(prev, val)); setNewEff(''); }
+  };
+  const addKm = () => {
+    const val = parseInt(newKm, 10);
+    if (!isNaN(val) && val > 0) { setLocalKm(prev => addSorted(prev, val)); setNewKm(''); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[88vh] flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
+          <div>
+            <h3 className="text-slate-800 font-bold text-sm flex items-center gap-2">
+              <SlidersHorizontal size={15} className="text-blue-600" />
+              Parity Axis Control Center
+            </h3>
+            <p className="text-slate-400 text-[11px] mt-0.5">
+              Customize the ECP rows and column values for both heatmap tables. Add or remove values.
+            </p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 p-1"><X size={18} /></button>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-5 space-y-6 overflow-y-auto flex-1">
+
+          {/* ECP */}
+          <AxisSection
+            title="ECP Values — vertical axis (both tables)"
+            subtitle="Enter in ₹ Lakh. Rows are shared across Table 1 and Table 2."
+          >
+            <div className="flex flex-wrap gap-2">
+              {localECPs.map((v, i) => (
+                <ChipTag
+                  key={v}
+                  label={`₹${(v / 100000).toFixed(1)}L`}
+                  color="blue"
+                  onRemove={localECPs.length > 2 ? () => setLocalECPs(prev => prev.filter((_, j) => j !== i)) : null}
+                />
+              ))}
+            </div>
+            <div className="flex gap-2 items-center">
+              <input
+                type="number" step="0.01" placeholder="e.g. 200"
+                value={newECPLakh}
+                onChange={e => setNewECPLakh(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addECP()}
+                className="w-36 border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              />
+              <span className="text-xs text-slate-400">₹ Lakh</span>
+              <button onClick={addECP}
+                className="px-3 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition-colors">
+                + Add
+              </button>
+              <button onClick={() => setLocalECPs(ECP_FACTORS.map(f => Math.round(baseECP * f)).sort((a, b) => a - b))}
+                className="px-3 py-1.5 border border-slate-200 text-xs text-slate-500 rounded-lg hover:bg-slate-50 transition-colors ml-auto">
+                Reset defaults
+              </button>
+            </div>
+          </AxisSection>
+
+          <div className="border-t border-slate-100" />
+
+          {/* Efficiency */}
+          <AxisSection
+            title="Energy Efficiency — Table 1 columns (kWh/km)"
+            subtitle="Horizontal axis for Table 1. Enter vehicle-side efficiency in kWh per km."
+          >
+            <div className="flex flex-wrap gap-2">
+              {localEff.map((v, i) => (
+                <ChipTag
+                  key={v}
+                  label={`${v.toFixed(2)} kWh/km`}
+                  color="slate"
+                  onRemove={localEff.length > 2 ? () => setLocalEff(prev => prev.filter((_, j) => j !== i)) : null}
+                />
+              ))}
+            </div>
+            <div className="flex gap-2 items-center">
+              <input
+                type="number" step="0.05" placeholder="e.g. 1.6"
+                value={newEff}
+                onChange={e => setNewEff(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addEff()}
+                className="w-36 border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              />
+              <span className="text-xs text-slate-400">kWh/km</span>
+              <button onClick={addEff}
+                className="px-3 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition-colors">
+                + Add
+              </button>
+              <button onClick={() => setLocalEff([...EFF_COLS])}
+                className="px-3 py-1.5 border border-slate-200 text-xs text-slate-500 rounded-lg hover:bg-slate-50 transition-colors ml-auto">
+                Reset defaults
+              </button>
+            </div>
+          </AxisSection>
+
+          <div className="border-t border-slate-100" />
+
+          {/* km/day */}
+          <AxisSection
+            title="Daily Usage — Table 2 columns (km/day)"
+            subtitle="Horizontal axis for Table 2. Enter daily km per bus."
+          >
+            <div className="flex flex-wrap gap-2">
+              {localKm.map((v, i) => (
+                <ChipTag
+                  key={v}
+                  label={`${v} km/day`}
+                  color="orange"
+                  onRemove={localKm.length > 2 ? () => setLocalKm(prev => prev.filter((_, j) => j !== i)) : null}
+                />
+              ))}
+            </div>
+            <div className="flex gap-2 items-center">
+              <input
+                type="number" step="10" placeholder="e.g. 650"
+                value={newKm}
+                onChange={e => setNewKm(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addKm()}
+                className="w-36 border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              />
+              <span className="text-xs text-slate-400">km/day</span>
+              <button onClick={addKm}
+                className="px-3 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition-colors">
+                + Add
+              </button>
+              <button onClick={() => setLocalKm([...KM_COLS])}
+                className="px-3 py-1.5 border border-slate-200 text-xs text-slate-500 rounded-lg hover:bg-slate-50 transition-colors ml-auto">
+                Reset defaults
+              </button>
+            </div>
+          </AxisSection>
+
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-slate-200 flex items-center justify-between flex-shrink-0 bg-slate-50 rounded-b-2xl">
+          <p className="text-[11px] text-slate-400">Min 2 values per axis. Click a chip's × to remove it.</p>
+          <div className="flex gap-3">
+            <button onClick={onClose}
+              className="px-4 py-2 text-sm text-slate-500 border border-slate-200 rounded-lg hover:bg-white transition-colors">
+              Cancel
+            </button>
+            <button
+              onClick={() => { onApply(localECPs, localEff, localKm); onClose(); }}
+              className="px-5 py-2 text-sm font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+            >
+              Apply & Update Heatmap
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function TCOAnalysis() {
   const [busType, setBusType] = useState('EV');
   const [dataSource, setDataSource] = useState('manual'); // 'manual' | 'excel'
@@ -773,6 +981,10 @@ export default function TCOAnalysis() {
   const [isPrinting, setIsPrinting] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [cardTooltip, setCardTooltip] = useState(null);
+  const [showParityControl, setShowParityControl] = useState(false);
+  const [customECPs,     setCustomECPs]     = useState(() => ECP_FACTORS.map(f => Math.round(EV_DEFAULTS.ecp * f)).sort((a, b) => a - b));
+  const [customEffCols,  setCustomEffCols]  = useState([...EFF_COLS]);
+  const [customKmCols,   setCustomKmCols]   = useState([...KM_COLS]);
   const fileRef = useRef();
   const resultsRef = useRef(null);
 
@@ -821,10 +1033,26 @@ export default function TCOAnalysis() {
       setResults(buildLifecycle(evP));
       setDslResults(buildLifecycle(dslP));
       setSensitivity(calcSensitivity(evP));
-      // Parity now uses the ACTUAL DSL params the user entered, not hardcoded defaults
-      setParityData(calcParityTables(evP, dslP));
+      const sECPs = customECPs.slice().sort((a, b) => a - b);
+      const sEff  = customEffCols.slice().sort((a, b) => a - b);
+      const sKm   = customKmCols.slice().sort((a, b) => a - b);
+      setParityData(calcParityTables(evP, dslP, sECPs, sEff, sKm));
       setIsCalculating(false);
     }, 400);
+  };
+
+  const handleApplyParityConfig = (ecps, effCols, kmCols) => {
+    const sECPs = ecps.slice().sort((a, b) => a - b);
+    const sEff  = effCols.slice().sort((a, b) => a - b);
+    const sKm   = kmCols.slice().sort((a, b) => a - b);
+    setCustomECPs(sECPs);
+    setCustomEffCols(sEff);
+    setCustomKmCols(sKm);
+    if (results && dslResults) {
+      const evP  = { ...params,    busType: 'EV'  };
+      const dslP = { ...dslParams, busType: 'DSL' };
+      setParityData(calcParityTables(evP, dslP, sECPs, sEff, sKm));
+    }
   };
 
   const handleFileUpload = (e) => {
@@ -862,17 +1090,19 @@ export default function TCOAnalysis() {
   const yearLabels = Array.from({ length: years }, (_, i) => `Yr ${i + 1}`);
 
   // Parity insight derivations (only meaningful when parityData is present)
-  let effColIdx = 0, kmColIdx = 0, maxParityECP = null, minParityKm = null;
+  let effColIdx = 0, kmColIdx = 0, currentECPRow = 0, maxParityECP = null, minParityKm = null;
   if (parityData) {
-    effColIdx = EFF_COLS.reduce((best, e, i) =>
-      Math.abs(e - params.fuelEfficiency) < Math.abs(EFF_COLS[best] - params.fuelEfficiency) ? i : best, 0);
-    kmColIdx = KM_COLS.reduce((best, k, i) =>
-      Math.abs(k - params.kmPerDay) < Math.abs(KM_COLS[best] - params.kmPerDay) ? i : best, 0);
-    for (let i = parityData.table1.length - 1; i >= 0; i--) {
-      if (parityData.table1[i].cells[effColIdx].diff < 0) { maxParityECP = parityData.table1[i].ecp; break; }
+    const pEff = parityData.effCols;
+    const pKm  = parityData.kmCols;
+    const pECP = parityData.ecpRows;
+    effColIdx   = pEff.reduce((b, e, i) => Math.abs(e - params.fuelEfficiency) < Math.abs(pEff[b] - params.fuelEfficiency) ? i : b, 0);
+    kmColIdx    = pKm.reduce((b, k, i)  => Math.abs(k - params.kmPerDay)       < Math.abs(pKm[b]  - params.kmPerDay)       ? i : b, 0);
+    currentECPRow = pECP.reduce((b, v, i) => Math.abs(v - params.ecp)          < Math.abs(pECP[b] - params.ecp)            ? i : b, 0);
+    for (let i = pECP.length - 1; i >= 0; i--) {
+      if (parityData.table1[i].cells[effColIdx].diff < 0) { maxParityECP = pECP[i]; break; }
     }
-    for (let j = 0; j < KM_COLS.length; j++) {
-      if (parityData.table2[5].cells[j].diff < 0) { minParityKm = KM_COLS[j]; break; }
+    for (let j = 0; j < pKm.length; j++) {
+      if (parityData.table2[currentECPRow].cells[j].diff < 0) { minParityKm = pKm[j]; break; }
     }
   }
 
@@ -1268,10 +1498,10 @@ export default function TCOAnalysis() {
                   {' '}— Equivalent Annualized ₹/km = NPV(all costs) ÷ NPV(all km) at 10% p.a. discount rate
                 </span>
                 <span className="text-slate-400 hidden sm:inline">·</span>
-                <span className="text-slate-500">
+                {/* <span className="text-slate-500">
                   <span className="font-semibold text-slate-700">ECP</span>
                   {' '}— Ex-Chassis Price = retail price + taxes (full landed cost of the bus before loan)
-                </span>
+                </span> */}
               </div>
 
               {/* ── Summary Cards ─── */}
@@ -1384,7 +1614,18 @@ export default function TCOAnalysis() {
                   icon={TrendingUp}
                   defaultOpen={true}
                   forceOpen={isPrinting}
-                  badge={<InfoButton onClick={() => setActiveModal('parity')} />}
+                  badge={
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={e => { e.stopPropagation(); setShowParityControl(true); }}
+                        className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-slate-600 bg-white hover:bg-blue-50 hover:text-blue-600 border border-slate-200 hover:border-blue-300 rounded-full transition-colors"
+                      >
+                        <SlidersHorizontal size={11} />
+                        Customize Axes
+                      </button>
+                      <InfoButton onClick={() => setActiveModal('parity')} />
+                    </div>
+                  }
                 >
                   {/* Insight callout cards */}
                   <div className="grid grid-cols-2 gap-3">
@@ -1396,7 +1637,7 @@ export default function TCOAnalysis() {
                         {maxParityECP != null ? `₹${(maxParityECP / 100000).toFixed(1)}L` : 'N/A'}
                       </p>
                       <p className="text-green-600 text-[11px] mt-1">
-                        At {EFF_COLS[effColIdx]} kWh/km — EV still cheaper than DSL
+                        At {parityData.effCols[effColIdx]} kWh/km — EV still cheaper than DSL
                       </p>
                     </div>
                     <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
@@ -1417,9 +1658,9 @@ export default function TCOAnalysis() {
                     <ParityHeatmap
                       title="Table 1 — kWh/km (efficiency) vs EV ECP"
                       data={parityData.table1}
-                      colHeaders={EFF_COLS.map(e => e.toFixed(1))}
+                      colHeaders={parityData.effCols.map(e => e.toFixed(2))}
                       colUnit="kWh/km"
-                      currentECPRow={5}
+                      currentECPRow={currentECPRow}
                       currentColIdx={effColIdx}
                     />
                   </div>
@@ -1429,9 +1670,9 @@ export default function TCOAnalysis() {
                     <ParityHeatmap
                       title="Table 2 — km/day vs EV ECP"
                       data={parityData.table2}
-                      colHeaders={KM_COLS.map(k => String(k))}
+                      colHeaders={parityData.kmCols.map(k => String(k))}
                       colUnit="km/day"
-                      currentECPRow={5}
+                      currentECPRow={currentECPRow}
                       currentColIdx={kmColIdx}
                     />
                   </div>
@@ -1687,6 +1928,18 @@ export default function TCOAnalysis() {
           )}
         </div>
       </div>
+
+      {/* ── Parity Control Modal ─────────────────────────────────────────────── */}
+      {showParityControl && (
+        <ParityControlModal
+          ecps={customECPs}
+          effCols={customEffCols}
+          kmCols={customKmCols}
+          baseECP={params.ecp}
+          onApply={handleApplyParityConfig}
+          onClose={() => setShowParityControl(false)}
+        />
+      )}
 
       {/* ── Info Modals ─────────────────────────────────────────────────────── */}
       {activeModal === 'parity' && (
