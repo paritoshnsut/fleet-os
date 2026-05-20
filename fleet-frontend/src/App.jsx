@@ -72,14 +72,15 @@ function AppShell() {
     }
   }, [user?.id]);
 
-  // When profile first loads (async after session), jump to the correct home page
-  const initialPageSet = useRef(false);
+  // When profile loads for a given user, jump to that role's home page.
+  // Track user.id so switching accounts always resets to the correct tab.
+  const initialPageSet = useRef(null);
   useEffect(() => {
-    if (profile && !initialPageSet.current) {
-      initialPageSet.current = true;
+    if (profile && user && initialPageSet.current !== user.id) {
+      initialPageSet.current = user.id;
       setActivePage(ROLE_HOME[profile.role] ?? 'fleet-map');
     }
-  }, [profile]);
+  }, [profile, user]);
 
   // Stable WS alert accumulator — lives here so it persists across page navigation
   const [wsAccum,   setWsAccum]   = useState([]);
@@ -106,7 +107,7 @@ function AppShell() {
     if (fresh.length > 0) setWsAccum(prev => [...fresh, ...prev]);
   }, [alerts]);
 
-  if (loading) {
+  if (loading || (user && !profile)) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="text-slate-400 text-sm">Loading…</div>
