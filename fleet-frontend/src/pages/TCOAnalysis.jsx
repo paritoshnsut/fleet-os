@@ -280,16 +280,18 @@ function calcParityTables(evParams, dslParams) {
 
   const table1 = ecpRows.map(ecp => ({
     ecp,
-    cells: EFF_COLS.map(eff =>
-      buildLifecycle({ ...evParams, ecp, fuelEfficiency: eff }).totalEAP - dslBaseEAP
-    ),
+    cells: EFF_COLS.map(eff => {
+      const evEAP = buildLifecycle({ ...evParams, ecp, fuelEfficiency: eff }).totalEAP;
+      return { diff: evEAP - dslBaseEAP, evEAP, dslEAP: dslBaseEAP };
+    }),
   }));
 
   const table2 = ecpRows.map(ecp => ({
     ecp,
-    cells: KM_COLS.map((km, j) =>
-      buildLifecycle({ ...evParams, ecp, kmPerDay: km }).totalEAP - dslEAPByKm[j]
-    ),
+    cells: KM_COLS.map((km, j) => {
+      const evEAP = buildLifecycle({ ...evParams, ecp, kmPerDay: km }).totalEAP;
+      return { diff: evEAP - dslEAPByKm[j], evEAP, dslEAP: dslEAPByKm[j] };
+    }),
   }));
 
   return { table1, table2, ecpRows };
@@ -604,10 +606,42 @@ function parityStyle(v) {
 }
 
 function ParityHeatmap({ title, data, colHeaders, colUnit, currentECPRow, currentColIdx }) {
+  const [tooltip, setTooltip] = useState(null);
+
   return (
-    <div>
+    <div className="relative">
       <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">{title}</p>
-      <div className="overflow-x-auto">
+
+      {/* Hover tooltip */}
+      {tooltip && (
+        <div
+          className="fixed z-[9999] bg-slate-900 text-white text-xs rounded-xl p-3 pointer-events-none shadow-2xl border border-slate-700"
+          style={{ left: tooltip.x + 14, top: tooltip.y - 10 }}
+        >
+          <p className="font-semibold text-slate-300 mb-2 text-[11px]">{tooltip.label}</p>
+          <div className="space-y-1">
+            <p className="flex justify-between gap-6">
+              <span className="text-slate-400">EV EAP</span>
+              <span className="text-blue-300 font-mono">₹{tooltip.evEAP.toFixed(2)}/km</span>
+            </p>
+            <p className="flex justify-between gap-6">
+              <span className="text-slate-400">DSL EAP</span>
+              <span className="text-orange-300 font-mono">₹{tooltip.dslEAP.toFixed(2)}/km</span>
+            </p>
+            <div className="border-t border-slate-700 pt-1 mt-1 flex justify-between gap-6">
+              <span className="text-slate-400">Difference</span>
+              <span className={cn('font-mono font-bold', tooltip.diff < 0 ? 'text-green-400' : 'text-red-400')}>
+                {tooltip.diff > 0 ? '+' : ''}{tooltip.diff.toFixed(2)}/km
+              </span>
+            </div>
+          </div>
+          <p className={cn('text-[10px] mt-2 font-medium', tooltip.diff < 0 ? 'text-green-400' : 'text-red-400')}>
+            {tooltip.diff < 0 ? '✓ EV is cheaper than Diesel' : '✗ Diesel is cheaper than EV'}
+          </p>
+        </div>
+      )}
+
+      <div className="overflow-x-auto" onMouseLeave={() => setTooltip(null)}>
         <table className="text-[11px] border-collapse min-w-max">
           <thead>
             <tr>
@@ -642,17 +676,23 @@ function ParityHeatmap({ title, data, colHeaders, colUnit, currentECPRow, curren
                 >
                   {(row.ecp / 100000).toFixed(1)}L
                 </td>
-                {row.cells.map((v, j) => {
+                {row.cells.map((cell, j) => {
+                  const v = cell.diff;
                   const s = parityStyle(v);
                   const isCurrent = i === currentECPRow && j === currentColIdx;
                   return (
                     <td
                       key={j}
-                      className="px-1.5 py-1 text-center font-mono border border-slate-100"
+                      className="px-1.5 py-1 text-center font-mono border border-slate-100 cursor-default"
                       style={{
                         ...s,
                         ...(isCurrent ? { outline: '2px solid #1e293b', outlineOffset: '-2px' } : {}),
                       }}
+                      onMouseMove={e => setTooltip({
+                        x: e.clientX, y: e.clientY,
+                        evEAP: cell.evEAP, dslEAP: cell.dslEAP, diff: v,
+                        label: `ECP ₹${(row.ecp / 100000).toFixed(1)}L · ${colHeaders[j]}${colUnit ? ' ' + colUnit : ''}`,
+                      })}
                     >
                       {v > 0 ? '+' : ''}{v.toFixed(1)}
                     </td>
@@ -674,7 +714,7 @@ function ParityHeatmap({ title, data, colHeaders, colUnit, currentECPRow, curren
           </span>
         ))}
         <span className="text-[10px] text-slate-400">
-          Bold border = your current inputs · Values in ₹/km (EV EAP − DSL EAP)
+          Hover any cell to see EV vs DSL EAP breakdown · Bold border = your current inputs · Values in ₹/km
         </span>
       </div>
     </div>
@@ -684,9 +724,13 @@ function ParityHeatmap({ title, data, colHeaders, colUnit, currentECPRow, curren
 export default function TCOAnalysis() {
   const [busType, setBusType] = useState('EV');
   const [dataSource, setDataSource] = useState('manual'); // 'manual' | 'excel'
-  const [valueMode, setValueMode] = useState('demo');     // 'demo' | 'custom'
-  const [params, setParams] = useState(EV_DEFAULTS);
+  const [valueMode, setValueMode] = useState('demo');     // 'demo' | 'custom' (EV tab)
+  const [dslValueMode, setDslValueMode] = useState('demo'); // DSL tab
+  const [params, setParams] = useState(EV_DEFAULTS);       // EV params
+  const [dslParams, setDslParams] = useState(DSL_DEFAULTS); // DSL params (separate!)
+  const [inputTab, setInputTab] = useState('EV');           // 'EV' | 'DSL'
   const [results, setResults] = useState(null);
+  const [dslResults, setDslResults] = useState(null);
   const [sensitivity, setSensitivity] = useState(null);
   const [activeModal, setActiveModal] = useState(null);
   const [uploadError, setUploadError] = useState('');
@@ -721,9 +765,8 @@ export default function TCOAnalysis() {
 
   const handleBusTypeChange = (type) => {
     setBusType(type);
-    setParams(type === 'EV' ? EV_DEFAULTS : DSL_DEFAULTS);
-    setValueMode('demo');
     setResults(null);
+    setDslResults(null);
     setSensitivity(null);
     setParityData(null);
   };
@@ -733,19 +776,21 @@ export default function TCOAnalysis() {
     setParams(prev => ({ ...prev, [key]: value }));
   };
 
+  const setDslParam = (key, value) => {
+    setDslValueMode('custom');
+    setDslParams(prev => ({ ...prev, [key]: value }));
+  };
+
   const handleCalculate = () => {
     setIsCalculating(true);
     setTimeout(() => {
-      const p = { ...params, busType };
-      const res = buildLifecycle(p);
-      const sens = calcSensitivity(p);
-      setResults(res);
-      setSensitivity(sens);
-      if (busType === 'EV') {
-        setParityData(calcParityTables(p, DSL_DEFAULTS));
-      } else {
-        setParityData(null);
-      }
+      const evP  = { ...params,    busType: 'EV'  };
+      const dslP = { ...dslParams, busType: 'DSL' };
+      setResults(buildLifecycle(evP));
+      setDslResults(buildLifecycle(dslP));
+      setSensitivity(calcSensitivity(evP));
+      // Parity now uses the ACTUAL DSL params the user entered, not hardcoded defaults
+      setParityData(calcParityTables(evP, dslP));
       setIsCalculating(false);
     }, 400);
   };
@@ -753,17 +798,22 @@ export default function TCOAnalysis() {
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    const targetType = inputTab; // upload goes into whichever tab is active
     setUploadError('');
     setUploadedFile(file.name);
     setIsUploading(true);
     setUploadSuccess(false);
-    parseExcel(file, busType, (parsed, err) => {
-      // Keep shimmer visible for at least 700ms so the user notices the change
+    parseExcel(file, targetType, (parsed, err) => {
       setTimeout(() => {
         setIsUploading(false);
         if (err) { setUploadError(err); return; }
-        setParams(prev => ({ ...prev, ...parsed, busType }));
-        setValueMode('custom');
+        if (targetType === 'EV') {
+          setParams(prev => ({ ...prev, ...parsed, busType: 'EV' }));
+          setValueMode('custom');
+        } else {
+          setDslParams(prev => ({ ...prev, ...parsed, busType: 'DSL' }));
+          setDslValueMode('custom');
+        }
         setUploadSuccess(true);
         setTimeout(() => setUploadSuccess(false), 2500);
       }, 700);
@@ -771,8 +821,10 @@ export default function TCOAnalysis() {
     e.target.value = '';
   };
 
-  const isDemo = valueMode === 'demo';
-  const p = field => params[field] ?? '';
+  const isDemo    = valueMode    === 'demo';
+  const isDslDemo = dslValueMode === 'demo';
+  const p   = field => params[field]    ?? '';
+  const dp  = field => dslParams[field] ?? '';
 
   const years = params.busLife || 6;
   const yearLabels = Array.from({ length: years }, (_, i) => `Yr ${i + 1}`);
@@ -785,10 +837,10 @@ export default function TCOAnalysis() {
     kmColIdx = KM_COLS.reduce((best, k, i) =>
       Math.abs(k - params.kmPerDay) < Math.abs(KM_COLS[best] - params.kmPerDay) ? i : best, 0);
     for (let i = parityData.table1.length - 1; i >= 0; i--) {
-      if (parityData.table1[i].cells[effColIdx] < 0) { maxParityECP = parityData.table1[i].ecp; break; }
+      if (parityData.table1[i].cells[effColIdx].diff < 0) { maxParityECP = parityData.table1[i].ecp; break; }
     }
     for (let j = 0; j < KM_COLS.length; j++) {
-      if (parityData.table2[5].cells[j] < 0) { minParityKm = KM_COLS[j]; break; }
+      if (parityData.table2[5].cells[j].diff < 0) { minParityKm = KM_COLS[j]; break; }
     }
   }
 
@@ -851,53 +903,83 @@ export default function TCOAnalysis() {
         {/* ── Left: Input Panel ─────────────────────────────────────────── */}
         <div className="w-full lg:w-80 flex-shrink-0 space-y-4 no-print">
 
-          {/* ── Value mode radio ── */}
-          <div className="bg-white rounded-xl border border-slate-200 p-4">
-            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest mb-3">Input values</p>
-            <div className="space-y-2">
+          {/* ── EV / DSL Tab Selector ── */}
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <div className="grid grid-cols-2">
               {[
-                { id: 'demo',   label: 'Use demo values',  desc: 'Pre-filled example values from the TCO model' },
-                { id: 'custom', label: 'Enter my own data', desc: 'Edit fields below or upload your Excel' },
-              ].map(opt => (
-                <label
-                  key={opt.id}
+                { id: 'EV',  label: '⚡ EV Parameters',  accent: 'bg-blue-600' },
+                { id: 'DSL', label: '⛽ Diesel Parameters', accent: 'bg-orange-500' },
+              ].map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => setInputTab(tab.id)}
                   className={cn(
-                    'flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all',
-                    valueMode === opt.id
-                      ? opt.id === 'demo'
-                        ? 'border-amber-300 bg-amber-50'
-                        : 'border-green-300 bg-green-50'
-                      : 'border-slate-200 hover:bg-slate-50'
+                    'py-3 text-sm font-semibold transition-all',
+                    inputTab === tab.id
+                      ? tab.id === 'EV' ? 'bg-blue-600 text-white' : 'bg-orange-500 text-white'
+                      : 'text-slate-500 hover:bg-slate-50'
                   )}
                 >
-                  <input
-                    type="radio"
-                    name="valueMode"
-                    value={opt.id}
-                    checked={valueMode === opt.id}
-                    onChange={() => setValueMode(opt.id)}
-                    className="mt-0.5 accent-blue-600"
-                  />
-                  <div>
-                    <p className={cn(
-                      'text-sm font-medium',
-                      valueMode === opt.id
-                        ? opt.id === 'demo' ? 'text-amber-700' : 'text-green-700'
-                        : 'text-slate-600'
-                    )}>{opt.label}</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">{opt.desc}</p>
-                  </div>
-                </label>
+                  {tab.label}
+                </button>
               ))}
             </div>
-            {isDemo && (
+            <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-100">
+              <p className="text-[11px] text-slate-500">
+                Fill both tabs, then hit <strong>Calculate TCO</strong> to compare.
+                {inputTab === 'EV'
+                  ? ' You are editing EV parameters.'
+                  : ' You are editing Diesel parameters.'}
+              </p>
+            </div>
+          </div>
+
+          {/* ── Value mode radio (tab-aware) ── */}
+          <div className="bg-white rounded-xl border border-slate-200 p-4">
+            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest mb-3">
+              {inputTab === 'EV' ? 'EV input values' : 'Diesel input values'}
+            </p>
+            <div className="space-y-2">
+              {[
+                { id: 'demo',   label: 'Use demo values',   desc: 'Pre-filled example values from the TCO model' },
+                { id: 'custom', label: 'Enter my own data', desc: 'Edit fields below or upload your Excel' },
+              ].map(opt => {
+                const activeMode = inputTab === 'EV' ? valueMode : dslValueMode;
+                const setMode    = inputTab === 'EV' ? setValueMode : setDslValueMode;
+                return (
+                  <label
+                    key={opt.id}
+                    className={cn(
+                      'flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all',
+                      activeMode === opt.id
+                        ? opt.id === 'demo' ? 'border-amber-300 bg-amber-50' : 'border-green-300 bg-green-50'
+                        : 'border-slate-200 hover:bg-slate-50'
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name={`valueMode-${inputTab}`}
+                      value={opt.id}
+                      checked={activeMode === opt.id}
+                      onChange={() => setMode(opt.id)}
+                      className="mt-0.5 accent-blue-600"
+                    />
+                    <div>
+                      <p className={cn(
+                        'text-sm font-medium',
+                        activeMode === opt.id
+                          ? opt.id === 'demo' ? 'text-amber-700' : 'text-green-700'
+                          : 'text-slate-600'
+                      )}>{opt.label}</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">{opt.desc}</p>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+            {(inputTab === 'EV' ? isDemo : isDslDemo) && (
               <p className="text-amber-600 text-[11px] mt-3 leading-relaxed">
                 Values in grey are example defaults. Switch to &ldquo;Enter my own data&rdquo; to use real numbers.
-              </p>
-            )}
-            {!isDemo && (
-              <p className="text-green-600 text-[11px] mt-3 flex items-center gap-1">
-                ✓ Custom values active — fields are editable
               </p>
             )}
           </div>
@@ -905,9 +987,11 @@ export default function TCOAnalysis() {
           {/* Excel upload */}
           {dataSource === 'excel' && (
             <div className="bg-white rounded-xl border border-slate-200 p-4">
-              <p className="text-sm font-medium text-slate-700 mb-3">Upload TCO Excel</p>
+              <p className="text-sm font-medium text-slate-700 mb-1">
+                Upload TCO Excel — {inputTab === 'EV' ? 'EV sheet' : 'Diesel sheet'}
+              </p>
               <p className="text-xs text-slate-400 mb-3">
-                Upload your <em>Alternate fuel TCO Parity scenarios</em> Excel. Values from the <strong>Input</strong> sheet will fill the form below.
+                Values will be loaded into the <strong>{inputTab === 'EV' ? 'EV' : 'Diesel'}</strong> parameters tab.
               </p>
               <button
                 onClick={() => fileRef.current.click()}
@@ -926,7 +1010,7 @@ export default function TCOAnalysis() {
               {uploadError && <p className="text-red-500 text-xs mt-2">{uploadError}</p>}
               {uploadSuccess && (
                 <p className="text-green-600 text-xs mt-2 font-medium animate-pulse">
-                  ✓ All values updated from Excel — review below then click Calculate
+                  ✓ {inputTab} values updated from Excel — review below then click Calculate
                 </p>
               )}
             </div>
@@ -934,106 +1018,65 @@ export default function TCOAnalysis() {
 
           {/* ── Input cards — shimmer wrapper ── */}
           <div className={cn('space-y-4 relative transition-opacity duration-300', isUploading && 'opacity-50 pointer-events-none')}>
-            {/* Shimmer overlay — sweeps across the cards while Excel is parsing */}
             {isUploading && (
               <div className="absolute inset-0 z-10 overflow-hidden rounded-xl pointer-events-none">
                 <div
                   className="absolute inset-y-0 w-1/2 animate-shimmer"
-                  style={{
-                    background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.75) 50%, transparent 100%)',
-                  }}
+                  style={{ background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.75) 50%, transparent 100%)' }}
                 />
               </div>
             )}
 
-            {/* Success flash border */}
             <div className={cn('space-y-4 transition-all duration-500', uploadSuccess && 'ring-2 ring-green-400 ring-offset-2 rounded-xl')}>
 
-              {/* Operation Parameters */}
-              <div className="bg-white rounded-xl border border-slate-200 p-4">
-                <p className={cn('text-sm font-semibold mb-3', isDemo ? 'text-slate-400' : 'text-slate-700')}>
-                  Operation Parameters
-                </p>
-                <div className="space-y-3">
-                  <InputField isDemo={isDemo} label="Avg km per day" unit="km/day" value={p('kmPerDay')} onChange={v => setParam('kmPerDay', v)} step="10" min="1" note="Required" />
-                  <InputField isDemo={isDemo} label="Operational days per year" unit="days/yr" value={p('operationalDays')} onChange={v => setParam('operationalDays', v)} step="1" min="1" />
-                  <InputField isDemo={isDemo} label="TCO analysis period" unit="years" value={p('busLife')} onChange={v => setParam('busLife', v)} step="1" min="1" note="Years of TCO to model (Excel uses 6 — distinct from physical bus life)" />
-                </div>
-              </div>
-
-              {/* Vehicle Cost */}
-              <div className="bg-white rounded-xl border border-slate-200 p-4">
-                <p className={cn('text-sm font-semibold mb-3', isDemo ? 'text-slate-400' : 'text-slate-700')}>
-                  Vehicle Cost & Finance
-                </p>
-                <div className="space-y-3">
-                  <InputField isDemo={isDemo} label="ECP (Retail price + taxes)" unit="₹" value={p('ecp')} onChange={v => setParam('ecp', v)} note="Required" />
-                  <InputField isDemo={isDemo} label="Loan share" unit="fraction" value={p('loanShare')} onChange={v => setParam('loanShare', v)} step="0.01" min="0" max="1" />
-                  <InputField isDemo={isDemo} label="Interest rate" unit="fraction" value={p('interestRate')} onChange={v => setParam('interestRate', v)} step="0.01" min="0" />
-                  <InputField isDemo={isDemo} label="Loan tenure" unit="years" value={p('loanTenure')} onChange={v => setParam('loanTenure', v)} step="1" min="1" />
-                  <InputField isDemo={isDemo} label="Bus salvage value" unit="fraction" value={p('busSalvage')} onChange={v => setParam('busSalvage', v)} step="0.01" min="0" />
-                  <InputField isDemo={isDemo} label="Insurance rate (annual)" unit="fraction" value={p('insuranceRate')} onChange={v => setParam('insuranceRate', v)} step="0.001" min="0" />
-                </div>
-              </div>
-
-              {/* Fuel / Energy */}
-              <div className="bg-white rounded-xl border border-slate-200 p-4">
-                <p className={cn('text-sm font-semibold mb-1', isDemo ? 'text-slate-400' : 'text-slate-700')}>
-                  {busType === 'EV' ? 'Energy Cost' : 'Fuel Cost'}
-                </p>
-                <p className="text-xs text-slate-400 mb-3">
-                  {busType === 'EV'
-                    ? 'kWh/km is vehicle-side efficiency. Grid draw accounts for charger & transformer losses.'
-                    : 'Fuel economy in km/L. Tariff in ₹ per litre.'}
-                </p>
-                <div className="space-y-3">
-                  <InputField
-                    isDemo={isDemo}
-                    label={busType === 'EV' ? 'Vehicle efficiency' : 'Fuel economy'}
-                    unit={busType === 'EV' ? 'kWh/km' : 'km/L'}
-                    value={p('fuelEfficiency')}
-                    onChange={v => setParam('fuelEfficiency', v)}
-                    step="0.01"
-                    note="Required"
-                  />
-                  <InputField
-                    isDemo={isDemo}
-                    label={busType === 'EV' ? 'Electricity tariff' : 'Diesel price'}
-                    unit="₹/unit"
-                    value={p('fuelTariff')}
-                    onChange={v => setParam('fuelTariff', v)}
-                    step="0.5"
-                    note="Required"
-                  />
-                  <InputField isDemo={isDemo} label="YoY escalation" unit="fraction" value={p('fuelYoY')} onChange={v => setParam('fuelYoY', v)} step="0.005" />
-                </div>
-              </div>
-
-              {/* Variable Costs */}
-              <div className="bg-white rounded-xl border border-slate-200 p-4">
-                <p className={cn('text-sm font-semibold mb-3', isDemo ? 'text-slate-400' : 'text-slate-700')}>
-                  Variable Costs
-                </p>
-                <div className="space-y-3">
-                  <InputField isDemo={isDemo} label="Manpower cost" unit="₹/km" value={p('manpowerPerKm')} onChange={v => setParam('manpowerPerKm', v)} step="0.1" />
-                  <InputField isDemo={isDemo} label="Manpower YoY" unit="fraction" value={p('manpowerYoY')} onChange={v => setParam('manpowerYoY', v)} step="0.005" />
-                  <InputField isDemo={isDemo} label="Bus AMC cost" unit="₹/km" value={p('amcPerKm')} onChange={v => setParam('amcPerKm', v)} step="0.1" />
-                  <InputField isDemo={isDemo} label="AMC YoY" unit="fraction" value={p('amcYoY')} onChange={v => setParam('amcYoY', v)} step="0.005" />
-                  <InputField isDemo={isDemo} label="Other Misc cost" unit="₹/km" value={p('miscPerKm')} onChange={v => setParam('miscPerKm', v)} step="0.1" />
-                  <InputField isDemo={isDemo} label="Misc YoY" unit="fraction" value={p('miscYoY')} onChange={v => setParam('miscYoY', v)} step="0.005" />
-                </div>
-              </div>
-
-              {/* EV Advanced */}
-              {busType === 'EV' && (
+              {/* ── EV Inputs ── */}
+              {inputTab === 'EV' && (<>
                 <div className="bg-white rounded-xl border border-slate-200 p-4">
-                  <button
-                    onClick={() => setShowAdvanced(s => !s)}
-                    className="flex items-center gap-2 w-full text-left"
-                  >
-                    <p className={cn('text-sm font-semibold flex-1', isDemo ? 'text-slate-400' : 'text-slate-700')}>
-                      Charging Infrastructure
-                    </p>
+                  <p className={cn('text-sm font-semibold mb-3', isDemo ? 'text-slate-400' : 'text-slate-700')}>Operation Parameters</p>
+                  <div className="space-y-3">
+                    <InputField isDemo={isDemo} label="Avg km per day" unit="km/day" value={p('kmPerDay')} onChange={v => setParam('kmPerDay', v)} step="10" min="1" note="Required" />
+                    <InputField isDemo={isDemo} label="Operational days per year" unit="days/yr" value={p('operationalDays')} onChange={v => setParam('operationalDays', v)} step="1" min="1" />
+                    <InputField isDemo={isDemo} label="TCO analysis period" unit="years" value={p('busLife')} onChange={v => setParam('busLife', v)} step="1" min="1" note="Years of TCO to model" />
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-slate-200 p-4">
+                  <p className={cn('text-sm font-semibold mb-3', isDemo ? 'text-slate-400' : 'text-slate-700')}>Vehicle Cost & Finance</p>
+                  <div className="space-y-3">
+                    <InputField isDemo={isDemo} label="ECP (Retail price + taxes)" unit="₹" value={p('ecp')} onChange={v => setParam('ecp', v)} note="Required" />
+                    <InputField isDemo={isDemo} label="Loan share" unit="fraction" value={p('loanShare')} onChange={v => setParam('loanShare', v)} step="0.01" min="0" max="1" />
+                    <InputField isDemo={isDemo} label="Interest rate" unit="fraction" value={p('interestRate')} onChange={v => setParam('interestRate', v)} step="0.01" min="0" />
+                    <InputField isDemo={isDemo} label="Loan tenure" unit="years" value={p('loanTenure')} onChange={v => setParam('loanTenure', v)} step="1" min="1" />
+                    <InputField isDemo={isDemo} label="Bus salvage value" unit="fraction" value={p('busSalvage')} onChange={v => setParam('busSalvage', v)} step="0.01" min="0" />
+                    <InputField isDemo={isDemo} label="Insurance rate (annual)" unit="fraction" value={p('insuranceRate')} onChange={v => setParam('insuranceRate', v)} step="0.001" min="0" />
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-slate-200 p-4">
+                  <p className={cn('text-sm font-semibold mb-1', isDemo ? 'text-slate-400' : 'text-slate-700')}>Energy Cost</p>
+                  <p className="text-xs text-slate-400 mb-3">kWh/km is vehicle-side efficiency. Grid draw accounts for charger &amp; transformer losses.</p>
+                  <div className="space-y-3">
+                    <InputField isDemo={isDemo} label="Vehicle efficiency" unit="kWh/km" value={p('fuelEfficiency')} onChange={v => setParam('fuelEfficiency', v)} step="0.01" note="Required" />
+                    <InputField isDemo={isDemo} label="Electricity tariff" unit="₹/kWh" value={p('fuelTariff')} onChange={v => setParam('fuelTariff', v)} step="0.5" note="Required" />
+                    <InputField isDemo={isDemo} label="YoY escalation" unit="fraction" value={p('fuelYoY')} onChange={v => setParam('fuelYoY', v)} step="0.005" />
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-slate-200 p-4">
+                  <p className={cn('text-sm font-semibold mb-3', isDemo ? 'text-slate-400' : 'text-slate-700')}>Variable Costs</p>
+                  <div className="space-y-3">
+                    <InputField isDemo={isDemo} label="Manpower cost" unit="₹/km" value={p('manpowerPerKm')} onChange={v => setParam('manpowerPerKm', v)} step="0.1" />
+                    <InputField isDemo={isDemo} label="Manpower YoY" unit="fraction" value={p('manpowerYoY')} onChange={v => setParam('manpowerYoY', v)} step="0.005" />
+                    <InputField isDemo={isDemo} label="Bus AMC cost" unit="₹/km" value={p('amcPerKm')} onChange={v => setParam('amcPerKm', v)} step="0.1" />
+                    <InputField isDemo={isDemo} label="AMC YoY" unit="fraction" value={p('amcYoY')} onChange={v => setParam('amcYoY', v)} step="0.005" />
+                    <InputField isDemo={isDemo} label="Other Misc cost" unit="₹/km" value={p('miscPerKm')} onChange={v => setParam('miscPerKm', v)} step="0.1" />
+                    <InputField isDemo={isDemo} label="Misc YoY" unit="fraction" value={p('miscYoY')} onChange={v => setParam('miscYoY', v)} step="0.005" />
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-slate-200 p-4">
+                  <button onClick={() => setShowAdvanced(s => !s)} className="flex items-center gap-2 w-full text-left">
+                    <p className={cn('text-sm font-semibold flex-1', isDemo ? 'text-slate-400' : 'text-slate-700')}>Charging Infrastructure</p>
                     {showAdvanced ? <ChevronDown size={14} className="text-slate-400" /> : <ChevronRight size={14} className="text-slate-400" />}
                   </button>
                   {showAdvanced && (
@@ -1048,7 +1091,53 @@ export default function TCOAnalysis() {
                     </div>
                   )}
                 </div>
-              )}
+              </>)}
+
+              {/* ── DSL Inputs ── */}
+              {inputTab === 'DSL' && (<>
+                <div className="bg-white rounded-xl border border-orange-200 p-4">
+                  <p className={cn('text-sm font-semibold mb-3', isDslDemo ? 'text-slate-400' : 'text-slate-700')}>Operation Parameters</p>
+                  <div className="space-y-3">
+                    <InputField isDemo={isDslDemo} label="Avg km per day" unit="km/day" value={dp('kmPerDay')} onChange={v => setDslParam('kmPerDay', v)} step="10" min="1" note="Required" />
+                    <InputField isDemo={isDslDemo} label="Operational days per year" unit="days/yr" value={dp('operationalDays')} onChange={v => setDslParam('operationalDays', v)} step="1" min="1" />
+                    <InputField isDemo={isDslDemo} label="TCO analysis period" unit="years" value={dp('busLife')} onChange={v => setDslParam('busLife', v)} step="1" min="1" note="Should match EV period for fair comparison" />
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-orange-200 p-4">
+                  <p className={cn('text-sm font-semibold mb-3', isDslDemo ? 'text-slate-400' : 'text-slate-700')}>Vehicle Cost & Finance</p>
+                  <div className="space-y-3">
+                    <InputField isDemo={isDslDemo} label="ECP (Retail price + taxes)" unit="₹" value={dp('ecp')} onChange={v => setDslParam('ecp', v)} note="Required" />
+                    <InputField isDemo={isDslDemo} label="Loan share" unit="fraction" value={dp('loanShare')} onChange={v => setDslParam('loanShare', v)} step="0.01" min="0" max="1" />
+                    <InputField isDemo={isDslDemo} label="Interest rate" unit="fraction" value={dp('interestRate')} onChange={v => setDslParam('interestRate', v)} step="0.01" min="0" />
+                    <InputField isDemo={isDslDemo} label="Loan tenure" unit="years" value={dp('loanTenure')} onChange={v => setDslParam('loanTenure', v)} step="1" min="1" />
+                    <InputField isDemo={isDslDemo} label="Bus salvage value" unit="fraction" value={dp('busSalvage')} onChange={v => setDslParam('busSalvage', v)} step="0.01" min="0" />
+                    <InputField isDemo={isDslDemo} label="Insurance rate (annual)" unit="fraction" value={dp('insuranceRate')} onChange={v => setDslParam('insuranceRate', v)} step="0.001" min="0" />
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-orange-200 p-4">
+                  <p className={cn('text-sm font-semibold mb-1', isDslDemo ? 'text-slate-400' : 'text-slate-700')}>Fuel Cost</p>
+                  <p className="text-xs text-slate-400 mb-3">Fuel economy in km/L. Tariff in ₹ per litre.</p>
+                  <div className="space-y-3">
+                    <InputField isDemo={isDslDemo} label="Fuel economy" unit="km/L" value={dp('fuelEfficiency')} onChange={v => setDslParam('fuelEfficiency', v)} step="0.1" note="Required" />
+                    <InputField isDemo={isDslDemo} label="Diesel price" unit="₹/L" value={dp('fuelTariff')} onChange={v => setDslParam('fuelTariff', v)} step="0.5" note="Required" />
+                    <InputField isDemo={isDslDemo} label="YoY escalation" unit="fraction" value={dp('fuelYoY')} onChange={v => setDslParam('fuelYoY', v)} step="0.005" />
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-orange-200 p-4">
+                  <p className={cn('text-sm font-semibold mb-3', isDslDemo ? 'text-slate-400' : 'text-slate-700')}>Variable Costs</p>
+                  <div className="space-y-3">
+                    <InputField isDemo={isDslDemo} label="Manpower cost" unit="₹/km" value={dp('manpowerPerKm')} onChange={v => setDslParam('manpowerPerKm', v)} step="0.1" />
+                    <InputField isDemo={isDslDemo} label="Manpower YoY" unit="fraction" value={dp('manpowerYoY')} onChange={v => setDslParam('manpowerYoY', v)} step="0.005" />
+                    <InputField isDemo={isDslDemo} label="Bus AMC cost" unit="₹/km" value={dp('amcPerKm')} onChange={v => setDslParam('amcPerKm', v)} step="0.1" />
+                    <InputField isDemo={isDslDemo} label="AMC YoY" unit="fraction" value={dp('amcYoY')} onChange={v => setDslParam('amcYoY', v)} step="0.005" />
+                    <InputField isDemo={isDslDemo} label="Other Misc cost" unit="₹/km" value={dp('miscPerKm')} onChange={v => setDslParam('miscPerKm', v)} step="0.1" />
+                    <InputField isDemo={isDslDemo} label="Misc YoY" unit="fraction" value={dp('miscYoY')} onChange={v => setDslParam('miscYoY', v)} step="0.005" />
+                  </div>
+                </div>
+              </>)}
 
             </div>{/* end success-flash wrapper */}
           </div>{/* end shimmer wrapper */}
@@ -1062,7 +1151,7 @@ export default function TCOAnalysis() {
               isCalculating ? 'bg-blue-400 cursor-wait' : 'bg-blue-600 hover:bg-blue-700 active:scale-[0.98]'
             )}
           >
-            {isCalculating ? <><Spinner /> Calculating…</> : <><Calculator size={16} /> Calculate TCO</>}
+            {isCalculating ? <><Spinner /> Calculating…</> : <><Calculator size={16} /> Calculate EV vs DSL</>}
           </button>
         </div>
 
@@ -1107,24 +1196,57 @@ export default function TCOAnalysis() {
                 </p>
               </div>
 
+              {/* ── EV vs DSL Comparison Summary ─── */}
+              {dslResults && (
+                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                  <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+                    <TrendingUp size={14} className="text-blue-600" />
+                    <p className="text-slate-800 font-semibold text-sm">EV vs Diesel — Cost Comparison</p>
+                  </div>
+                  <div className="grid grid-cols-3 divide-x divide-slate-100">
+                    <div className="p-4 text-center">
+                      <p className="text-[11px] text-blue-500 font-semibold uppercase tracking-wide mb-1">⚡ EV Total EAP</p>
+                      <p className="text-2xl font-bold text-blue-700">₹{results.totalEAP.toFixed(2)}</p>
+                      <p className="text-slate-400 text-xs">/km annualized</p>
+                    </div>
+                    <div className="p-4 text-center">
+                      <p className="text-[11px] text-orange-500 font-semibold uppercase tracking-wide mb-1">⛽ Diesel Total EAP</p>
+                      <p className="text-2xl font-bold text-orange-700">₹{dslResults.totalEAP.toFixed(2)}</p>
+                      <p className="text-slate-400 text-xs">/km annualized</p>
+                    </div>
+                    <div className={cn('p-4 text-center', results.totalEAP < dslResults.totalEAP ? 'bg-green-50' : 'bg-red-50')}>
+                      <p className={cn('text-[11px] font-semibold uppercase tracking-wide mb-1', results.totalEAP < dslResults.totalEAP ? 'text-green-600' : 'text-red-600')}>
+                        {results.totalEAP < dslResults.totalEAP ? '✓ EV Saves' : '✗ EV Costs More'}
+                      </p>
+                      <p className={cn('text-2xl font-bold', results.totalEAP < dslResults.totalEAP ? 'text-green-700' : 'text-red-700')}>
+                        ₹{Math.abs(results.totalEAP - dslResults.totalEAP).toFixed(2)}
+                      </p>
+                      <p className={cn('text-xs', results.totalEAP < dslResults.totalEAP ? 'text-green-500' : 'text-red-500')}>
+                        /km vs diesel
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* ── Summary Cards ─── */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {[
-                  { label: 'Total EAP', value: `₹${results.totalEAP.toFixed(2)}/km`, sub: 'Equiv. annualized cost' },
-                  { label: 'Annual km', value: fmt(results.annualKm), sub: 'km/year per bus' },
-                  { label: 'Analysis period', value: `${results.years} years`, sub: 'Bus life assumed' },
-                  { label: 'Fuel share', value: `${((results.eapPerRow?.['Fuel Cost'] || 0) / results.totalEAP * 100).toFixed(1)}%`, sub: 'of total EAP' },
+                  { label: '⚡ EV EAP', value: `₹${results.totalEAP.toFixed(2)}/km`, sub: 'Equiv. annualized cost', color: 'text-blue-700' },
+                  { label: '⛽ DSL EAP', value: dslResults ? `₹${dslResults.totalEAP.toFixed(2)}/km` : 'Run calc.', sub: 'Equiv. annualized cost', color: 'text-orange-700' },
+                  { label: 'Annual km', value: fmt(results.annualKm), sub: 'km/year per bus', color: 'text-slate-800' },
+                  { label: 'EV Fuel share', value: `${((results.eapPerRow?.['Fuel Cost'] || 0) / results.totalEAP * 100).toFixed(1)}%`, sub: 'of EV total EAP', color: 'text-slate-800' },
                 ].map(c => (
                   <div key={c.label} className="bg-white rounded-xl border border-slate-200 p-4">
                     <p className="text-slate-400 text-xs mb-1">{c.label}</p>
-                    <p className="text-slate-800 font-bold text-lg leading-tight">{c.value}</p>
+                    <p className={cn('font-bold text-lg leading-tight', c.color)}>{c.value}</p>
                     <p className="text-slate-400 text-[11px] mt-0.5">{c.sub}</p>
                   </div>
                 ))}
               </div>
 
-              {/* ── Accordion 1: Parity Analysis (EV only) ── */}
-              {busType === 'EV' && parityData && (
+              {/* ── Accordion 1: Parity Analysis ── */}
+              {parityData && (
                 <Accordion
                   title="Parity Analysis — EV vs DSL Breakeven"
                   icon={TrendingUp}
@@ -1185,17 +1307,17 @@ export default function TCOAnalysis() {
               )}
 
               {/* ── Accordion 2: Lifecycle & Sensitivity ── */}
-              <div className={busType === 'EV' ? 'print-page-break' : ''}>
+              <div className="print-page-break">
               <Accordion
-                title="Detailed Lifecycle & Sensitivity Analysis"
+                title="Detailed Lifecycle & Sensitivity Analysis (EV)"
                 icon={BarChart2}
-                defaultOpen={busType === 'DSL'}
+                defaultOpen={false}
                 forceOpen={isPrinting}
               >
                 {/* Lifecycle Cost Table */}
                 <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
                   <div className="px-5 py-4 border-b border-slate-100">
-                    <SectionHeader icon={TrendingUp} title={`${busType} Lifecycle Cost Mapping (₹ Lakh)`}>
+                    <SectionHeader icon={TrendingUp} title="⚡ EV Lifecycle Cost Mapping (₹ Lakh)">
                       <InfoButton onClick={() => setActiveModal('lifecycle')} />
                     </SectionHeader>
                   </div>
