@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import {
   Zap, AlertTriangle, Info,
   UploadCloud, RotateCcw, FileSpreadsheet,
-  Pencil, Plus, Trash2, Copy,
+  Pencil, Plus, Trash2, Copy, SlidersHorizontal, X,
 } from 'lucide-react';
 import { cn, formatINR } from '../lib/utils';
 
@@ -29,16 +29,16 @@ function slotToHHMM(slot) {
   const totalMin = (slot % SLOTS_DAY) * SLOT_MIN;
   return `${String(Math.floor(totalMin / 60)).padStart(2, '0')}:${String(totalMin % 60).padStart(2, '0')}`;
 }
-function slotTariff(slot) {
-  return HOUR_TARIFF[Math.floor((slot % SLOTS_DAY) / 2)];
+function slotTariff(slot, ht) {
+  return ht[Math.floor((slot % SLOTS_DAY) / 2)];
 }
-function windowCost(startSlot, numSlots) {
+function windowCost(startSlot, numSlots, ht) {
   let c = 0;
-  for (let s = 0; s < numSlots; s++) c += slotTariff(startSlot + s) * CHARGER_KW * (SLOT_MIN / 60);
+  for (let s = 0; s < numSlots; s++) c += slotTariff(startSlot + s, ht) * CHARGER_KW * (SLOT_MIN / 60);
   return c;
 }
 
-function runScheduler(busList, numChargers) {
+function runScheduler(busList, numChargers, ht) {
   const TOTAL = SLOTS_DAY * 2;
   const occ   = Array.from({ length: numChargers }, () => new Array(TOTAL).fill(null));
 
@@ -59,7 +59,7 @@ function runScheduler(busList, numChargers) {
     let bestCost = Infinity, bestStart = -1, bestCharger = -1;
 
     for (let start = outSlot; start <= inSlot - numSlots; start++) {
-      const cost = windowCost(start, numSlots);
+      const cost = windowCost(start, numSlots, ht);
       if (cost >= bestCost) continue;
       for (let c = 0; c < numChargers; c++) {
         let free = true;
@@ -72,7 +72,7 @@ function runScheduler(busList, numChargers) {
 
     if (bestStart >= 0) {
       for (let s = 0; s < numSlots; s++) occ[bestCharger][bestStart + s] = bus.busId;
-      const naiveCost = windowCost(outSlot, numSlots);
+      const naiveCost = windowCost(outSlot, numSlots, ht);
       scheduled.push({
         busId:       bus.busId,
         charger:     `C-${String(bestCharger + 1).padStart(2, '0')}`,
@@ -109,12 +109,12 @@ function runScheduler(busList, numChargers) {
   };
 }
 
-function findMinChargers(busList) {
+function findMinChargers(busList, ht) {
   if (!busList.length) return 1;
   let lo = 1, hi = busList.length, result = busList.length;
   while (lo <= hi) {
     const mid = Math.floor((lo + hi) / 2);
-    if (runScheduler(busList, mid).conflicts.length === 0) { result = mid; hi = mid - 1; }
+    if (runScheduler(busList, mid, ht).conflicts.length === 0) { result = mid; hi = mid - 1; }
     else lo = mid + 1;
   }
   return result;
@@ -287,7 +287,7 @@ const DEMO_ROWS = [
 ];
 
 /* ── Charger Timeline visualisation ──────────────────────────────────────── */
-function ChargerTimeline({ scheduled, tariff }) {
+function ChargerTimeline({ scheduled, tariff, onConfigureTariff }) {
   const containerRef           = useRef(null);
   const [svgWidth, setSvgWidth] = useState(900);
   const [tooltip, setTooltip]   = useState(null);
@@ -339,10 +339,14 @@ function ChargerTimeline({ scheduled, tariff }) {
   const startH = Math.floor(T_START / 60);
   const endH   = Math.ceil(T_END / 60);
 
+  const tariffMin = Math.min(...tariff);
+  const tariffMax = Math.max(...tariff);
+  const tariffRange = tariffMax - tariffMin || 1;
+
   const bands = [];
   for (let h = startH; h < endH; h++) {
     const rate = tariff[h % 24];
-    const norm = (rate - 3.8) / (9.5 - 3.8);
+    const norm = (rate - tariffMin) / tariffRange;
     const x    = Math.max(0, ((h * 60 - T_START) / T_RANGE) * W);
     const bw   = (60 / T_RANGE) * W;
     bands.push({ h, rate, norm, x, bw, barH: Math.round(norm * TARIFF_H * 0.80) + 6 });
@@ -387,18 +391,29 @@ function ChargerTimeline({ scheduled, tariff }) {
             Each row = one charger · bars = charging windows · background = tariff intensity · hover a bar for details
           </p>
         </div>
-        <div className="flex items-center gap-5 text-xs">
-          {[
-            [COLORS.optimised, 'Delayed (off-peak)'],
-            [COLORS.immediate, 'Immediate'],
-            [COLORS.urgent,    'Urgent (low SOC)'],
-          ].map(([col, label]) => (
-            <span key={label} className="flex items-center gap-1.5 text-slate-500">
-              <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0 inline-block"
-                style={{ backgroundColor: col, opacity: 0.9 }} />
-              {label}
-            </span>
-          ))}
+        <div className="flex items-center gap-3 flex-wrap">
+          {onConfigureTariff && (
+            <button
+              onClick={onConfigureTariff}
+              className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-slate-600 bg-white hover:bg-blue-50 hover:text-blue-600 border border-slate-200 hover:border-blue-300 rounded-full transition-colors"
+            >
+              <SlidersHorizontal size={11} />
+              Configure Tariff
+            </button>
+          )}
+          <div className="flex items-center gap-5 text-xs">
+            {[
+              [COLORS.optimised, 'Delayed (off-peak)'],
+              [COLORS.immediate, 'Immediate'],
+              [COLORS.urgent,    'Urgent (low SOC)'],
+            ].map(([col, label]) => (
+              <span key={label} className="flex items-center gap-1.5 text-slate-500">
+                <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0 inline-block"
+                  style={{ backgroundColor: col, opacity: 0.9 }} />
+                {label}
+              </span>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -440,8 +455,8 @@ function ChargerTimeline({ scheduled, tariff }) {
           ))}
 
           {/* Rate axis labels */}
-          <text x={PAD_L - 8} y={PAD_T + 11}           textAnchor="end" fontSize="9" fill="#94a3b8">₹9.5</text>
-          <text x={PAD_L - 8} y={PAD_T + TARIFF_H - 2}  textAnchor="end" fontSize="9" fill="#94a3b8">₹3.8</text>
+          <text x={PAD_L - 8} y={PAD_T + 11}           textAnchor="end" fontSize="9" fill="#94a3b8">₹{tariffMax.toFixed(1)}</text>
+          <text x={PAD_L - 8} y={PAD_T + TARIFF_H - 2}  textAnchor="end" fontSize="9" fill="#94a3b8">₹{tariffMin.toFixed(1)}</text>
           <text x={PAD_L - 8} y={PAD_T + TARIFF_H / 2 + 4} textAnchor="end" fontSize="8" fill="#cbd5e1">₹/kWh</text>
 
           {/* Sparkline baseline */}
@@ -565,6 +580,165 @@ function ChargerTimeline({ scheduled, tariff }) {
   );
 }
 
+/* ── Tariff Control Modal ────────────────────────────────────────────────────── */
+
+const TARIFF_PRESETS = [
+  { label: 'Reset defaults', rates: [...HOUR_TARIFF] },
+  { label: 'Flat ₹6/kWh',   rates: new Array(24).fill(6.0) },
+  {
+    label: 'Simple ToU',
+    rates: Array.from({ length: 24 }, (_, h) =>
+      h >= 9 && h < 13 ? 9.5 : h >= 17 && h < 21 ? 9.0 : h < 6 || h >= 22 ? 3.8 : 6.0
+    ),
+  },
+];
+
+function TariffControlModal({ hourTariff, onApply, onClose }) {
+  const [local, setLocal] = useState([...hourTariff]);
+
+  const tariffMin = Math.min(...local);
+  const tariffMax = Math.max(...local);
+  const tariffRange = tariffMax - tariffMin || 1;
+
+  const setHour = (h, val) => {
+    const v = parseFloat(val);
+    if (isNaN(v) || v < 0) return;
+    setLocal(prev => prev.map((r, i) => i === h ? v : r));
+  };
+
+  const HOUR_LABELS = [
+    '00','01','02','03','04','05','06','07','08','09','10','11',
+    '12','13','14','15','16','17','18','19','20','21','22','23',
+  ];
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
+          <div>
+            <h3 className="text-slate-800 font-bold text-sm flex items-center gap-2">
+              <SlidersHorizontal size={15} className="text-blue-600" />
+              Electricity Tariff Schedule
+            </h3>
+            <p className="text-slate-400 text-[11px] mt-0.5">
+              Set the ₹/kWh rate for each hour. The scheduler picks cheapest windows based on this curve.
+            </p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 p-1"><X size={18} /></button>
+        </div>
+
+        <div className="px-6 py-5 overflow-y-auto flex-1 space-y-5">
+          {/* Tariff curve preview */}
+          <div>
+            <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-2">Live Preview</p>
+            <div className="bg-slate-50 rounded-xl p-3">
+              <div className="flex items-end gap-px h-12">
+                {local.map((rate, h) => {
+                  const norm = (rate - tariffMin) / tariffRange;
+                  return (
+                    <div
+                      key={h}
+                      className="flex-1 rounded-sm transition-all duration-150"
+                      style={{
+                        height: `${Math.max(8, norm * 100)}%`,
+                        backgroundColor: `hsl(${Math.round((1 - norm) * 120)}, 68%, 44%)`,
+                        opacity: 0.85,
+                      }}
+                      title={`${HOUR_LABELS[h]}:00 — ₹${rate}/kWh`}
+                    />
+                  );
+                })}
+              </div>
+              <div className="flex justify-between text-[10px] text-slate-400 mt-1.5 px-0.5">
+                {['00:00','06:00','12:00','18:00','23:00'].map(t => <span key={t}>{t}</span>)}
+              </div>
+            </div>
+            <div className="flex gap-4 mt-2 text-[11px] text-slate-500">
+              <span>Peak: <strong className="text-red-600">₹{tariffMax.toFixed(1)}/kWh</strong></span>
+              <span>Off-peak: <strong className="text-green-600">₹{tariffMin.toFixed(1)}/kWh</strong></span>
+              <span>Daily avg: <strong className="text-slate-700">₹{(local.reduce((a, b) => a + b, 0) / 24).toFixed(1)}/kWh</strong></span>
+            </div>
+          </div>
+
+          {/* Quick presets */}
+          <div>
+            <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-2">Quick Presets</p>
+            <div className="flex gap-2 flex-wrap">
+              {TARIFF_PRESETS.map(p => (
+                <button
+                  key={p.label}
+                  onClick={() => setLocal([...p.rates])}
+                  className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 text-slate-600 transition-colors"
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 24-hour grid */}
+          <div>
+            <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-2">Hourly Rates (₹/kWh)</p>
+            <div className="grid grid-cols-6 gap-2">
+              {local.map((rate, h) => {
+                const norm = (rate - tariffMin) / tariffRange;
+                const hue  = Math.round((1 - norm) * 120);
+                return (
+                  <div
+                    key={h}
+                    className="rounded-lg p-2 text-center border"
+                    style={{
+                      borderColor: `hsl(${hue}, 45%, 78%)`,
+                      background:  `hsl(${hue}, 35%, 97%)`,
+                    }}
+                  >
+                    <p className="text-[10px] font-medium mb-1" style={{ color: `hsl(${hue}, 50%, 40%)` }}>
+                      {HOUR_LABELS[h]}:00
+                    </p>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      max="99"
+                      value={rate}
+                      onChange={e => setHour(h, e.target.value)}
+                      className="w-full text-center text-xs font-bold bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-blue-300 rounded px-0"
+                      style={{ color: `hsl(${hue}, 55%, 30%)` }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-slate-200 flex items-center justify-between flex-shrink-0 bg-slate-50 rounded-b-2xl">
+          <p className="text-[11px] text-slate-400">Changes apply immediately and re-run the schedule.</p>
+          <div className="flex gap-3">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm text-slate-500 border border-slate-200 rounded-lg hover:bg-white transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => { onApply(local); onClose(); }}
+              className="px-5 py-2 text-sm font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+            >
+              Apply & Reschedule
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ChargingPlanner() {
   const [chargePlan,        setChargePlan]        = useState(null);
   const [parseError,        setParseError]        = useState('');
@@ -575,12 +749,14 @@ export default function ChargingPlanner() {
   const [optimizerLoading,  setOptimizerLoading]  = useState(false);
   const [usedFallback,      setUsedFallback]      = useState(false);
   const [infoTip,           setInfoTip]           = useState(null);
+  const [hourTariff,        setHourTariff]        = useState([...HOUR_TARIFF]);
+  const [showTariffControl, setShowTariffControl] = useState(false);
   const fileRef = useRef(null);
 
   const COL_INFO = {
     cost: {
       title: 'How cost is calculated',
-      body:  'kWh needed × tariff rate at the scheduled charge hour (₹/kWh). kWh is derived from the bus energy capacity × (100% – current SoC%). The rate varies by hour — off-peak (e.g. 02:00) can be as low as ₹3.8/kWh vs ₹9.5/kWh at peak.',
+      body:  `kWh needed × tariff rate at the scheduled charge hour (₹/kWh). kWh is derived from the bus energy capacity × (100% – current SoC%). The rate varies by hour — off-peak can be as low as ₹${Math.min(...hourTariff).toFixed(1)}/kWh vs ₹${Math.max(...hourTariff).toFixed(1)}/kWh at peak.`,
     },
     saved: {
       title: 'How savings are calculated',
@@ -589,12 +765,21 @@ export default function ChargingPlanner() {
   };
 
   function scheduleAndStore(busList, meta) {
-    const minChargers = findMinChargers(busList);
-    const result      = runScheduler(busList, minChargers);
+    const minChargers = findMinChargers(busList, hourTariff);
+    const result      = runScheduler(busList, minChargers, hourTariff);
     const busDetails  = Object.fromEntries(
       busList.map(b => [b.busId, { numTrips: b.numTrips ?? 1, routes: b.routes ?? [] }])
     );
-    setChargePlan({ ...meta, minChargers, busDetails, ...result });
+    setChargePlan({ ...meta, minChargers, busDetails, busList, ...result });
+  }
+
+  function handleApplyTariff(newTariff) {
+    setHourTariff(newTariff);
+    if (chargePlan?.busList) {
+      const minChargers = findMinChargers(chargePlan.busList, newTariff);
+      const result      = runScheduler(chargePlan.busList, minChargers, newTariff);
+      setChargePlan(prev => ({ ...prev, minChargers, ...result }));
+    }
   }
 
   function busFromBackendLeg(bus) {
@@ -785,7 +970,11 @@ export default function ChargingPlanner() {
           )}
 
           {/* Charger Timeline visualization */}
-          <ChargerTimeline scheduled={chargePlan.scheduled} tariff={HOUR_TARIFF} />
+          <ChargerTimeline
+            scheduled={chargePlan.scheduled}
+            tariff={hourTariff}
+            onConfigureTariff={() => setShowTariffControl(true)}
+          />
 
           {/* Schedule table */}
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
@@ -1132,6 +1321,15 @@ export default function ChargingPlanner() {
             </div>
           )}
         </div>
+      )}
+
+      {/* Tariff Control Modal */}
+      {showTariffControl && (
+        <TariffControlModal
+          hourTariff={hourTariff}
+          onApply={handleApplyTariff}
+          onClose={() => setShowTariffControl(false)}
+        />
       )}
     </div>
   );
