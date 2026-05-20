@@ -240,7 +240,7 @@ function CoachingNotes({ driver }) {
   );
 }
 
-function DriverRow({ driver, rank, isExpanded, onToggle }) {
+function DriverRow({ driver, rank, isExpanded, onToggle, gccDriverRatePerKm }) {
   const scoreColor = driver.score >= 80
     ? 'text-green-600' : driver.score >= 60
     ? 'text-amber-600' : 'text-red-600';
@@ -396,7 +396,7 @@ function DriverRow({ driver, rank, isExpanded, onToggle }) {
 
 export default function FleetDrivers({ fetchDrivers }) {
   const { config } = useFleetConfig();
-  const { overspeedThreshold, gccDriverRatePerKm } = config;
+  const { gccDriverRatePerKm } = config;
 
   const [drivers,     setDrivers]     = useState([]);
   const [loading,     setLoading]     = useState(true);
@@ -520,6 +520,7 @@ export default function FleetDrivers({ fetchDrivers }) {
             rank={idx + 1}
             isExpanded={expandedId === driver.id}
             onToggle={() => setExpandedId(p => p === driver.id ? null : driver.id)}
+            gccDriverRatePerKm={gccDriverRatePerKm}
           />
         ))}
         {sorted.length === 0 && (
