@@ -20,6 +20,7 @@ export default function TopBar({ connected, wsAccum = [], activePage }) {
     'fleet-gcc':     'Fleet Intelligence — GCC Compliance',
     'fleet-ev':      'Fleet Intelligence — EV Charging',
     'safe-school':   'SafeRide — School Dashboard',
+    'safe-admin':    'SafeRide — Control Panel',
     'safe-parent':   'SafeRide — Parent View',
     'ondc-journey':  'ONDC Transport — Journey Planner',
     'ondc-arrivals': 'ONDC Transport — Live Arrivals',
