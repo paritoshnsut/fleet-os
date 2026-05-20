@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 380">
+  <!-- Blue ellipse -->
+  <ellipse cx="240" cy="155" rx="236" ry="148" fill="#1D6DB8"/>
+
+  <!-- White top crescent (between ellipse top and T bar) -->
+  <path d="
+    M240,10
+    C170,10  90,48  18,105
+    C 58,72  130,52  172,56
+    C186,52  198,48  210,47
+    C214,42  220,38  240,38
+    C260,38  266,42  270,47
+    C282,48  294,52  308,56
+    C350,52  422,72  462,105
+    C390,48  310,10  240,10Z
+  " fill="white"/>
+
+  <!-- White left wing (left of T stem, below bar) -->
+  <path d="
+    M18,105
+    C 58,72  130,52  172,56
+    L166,295
+    C110,278   52,238   22,192
+    C  4,168    6,134   18,105Z
+  " fill="white"/>
+
+  <!-- White right wing (mirror) -->
+  <path d="
+    M462,105
+    C422,72  350,52  308,56
+    L314,295
+    C370,278  428,238  458,192
+    C476,168  474,134  462,105Z
+  " fill="white"/>
+
+  <!-- TATA wordmark -->
+  <text
+    x="240" y="336"
+    text-anchor="middle"
+    font-family="'Arial Black','Arial',sans-serif"
+    font-weight="900"
+    font-size="70"
+    letter-spacing="12"
+    fill="#1D6DB8"
+  >TATA</text>
+
+  <!-- MOTORS wordmark -->
+  <text
+    x="249" y="375"
+    text-anchor="middle"
+    font-family="'Arial','sans-serif'"
+    font-weight="600"
+    font-size="46"
+    letter-spacing="10"
+    fill="#1D6DB8"
+  >MOTORS</text>
+</svg>

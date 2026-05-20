@@ -82,15 +82,20 @@ export default function Sidebar({ activePage, setActivePage }) {
       collapsed ? 'w-16' : 'w-60'
     )}>
       {/* Logo */}
-      <div className="flex items-center gap-3 px-4 py-5 border-b border-slate-100">
-        <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center flex-shrink-0">
-          <Bus size={16} className="text-white" />
-        </div>
-        {!collapsed && (
-          <div>
-            <p className="text-slate-900 font-bold text-sm leading-tight">FleetOS</p>
-            <p className="text-slate-400 text-xs">Tata Motors CV</p>
-          </div>
+      <div className={cn(
+        'flex items-center border-b border-slate-100 transition-all',
+        collapsed ? 'justify-center px-3 py-4' : 'gap-3 px-4 py-4'
+      )}>
+        {collapsed ? (
+          <img src="/tata-logo.svg" alt="Tata Motors" className="h-8 w-auto" />
+        ) : (
+          <>
+            <img src="/tata-logo.svg" alt="Tata Motors" className="h-10 w-auto flex-shrink-0" />
+            <div>
+              <p className="text-slate-900 font-bold text-sm leading-tight">FleetOS</p>
+              <p className="text-slate-400 text-xs">Tata Motors CV</p>
+            </div>
+          </>
         )}
       </div>
 

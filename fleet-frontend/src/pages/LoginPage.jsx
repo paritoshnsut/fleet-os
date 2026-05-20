@@ -1,58 +1,35 @@
 import { useState } from 'react';
-import { Bus, Shield, Users, Eye, EyeOff, Loader2, LayoutDashboard, LineChart } from 'lucide-react';
+import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { cn } from '../lib/utils';
 
 const ROLES = [
-  {
-    id: 'admin',
-    label: 'Admin',
-    desc: 'Full access to all features — fleet, school, passengers',
-    icon: LayoutDashboard,
-    color: 'indigo',
-  },
-  {
-    id: 'fleet_operator',
-    label: 'Fleet Operator',
-    desc: 'Manage buses, drivers, alerts & compliance',
-    icon: Bus,
-    color: 'blue',
-  },
-  {
-    id: 'internal_analyst',
-    label: 'Internal Analyst',
-    desc: 'Trip planning and TCO cost analysis tools',
-    icon: LineChart,
-    color: 'teal',
-  },
-  {
-    id: 'school_staff',
-    label: 'School Staff',
-    desc: 'Student tracking, headcount & bus management',
-    icon: Shield,
-    color: 'green',
-  },
-  {
-    id: 'parent',
-    label: 'Parent',
-    desc: "Track your child's bus, get live ETAs",
-    icon: Users,
-    color: 'purple',
-  },
+  { id: 'admin',            label: 'Admin'            },
+  { id: 'fleet_operator',   label: 'Fleet Operator'   },
+  { id: 'internal_analyst', label: 'Internal Analyst' },
+  { id: 'school_staff',     label: 'School Staff'     },
+  { id: 'parent',           label: 'Parent'           },
 ];
 
-const COLOR_MAP = {
-  indigo: { ring: 'ring-indigo-300', bg: 'bg-indigo-50', border: 'border-indigo-300', icon: 'bg-indigo-100 text-indigo-600', text: 'text-indigo-700' },
-  blue:   { ring: 'ring-blue-300',   bg: 'bg-blue-50',   border: 'border-blue-300',   icon: 'bg-blue-100 text-blue-600',   text: 'text-blue-700'   },
-  teal:   { ring: 'ring-teal-300',   bg: 'bg-teal-50',   border: 'border-teal-300',   icon: 'bg-teal-100 text-teal-600',   text: 'text-teal-700'   },
-  green:  { ring: 'ring-green-300',  bg: 'bg-green-50',  border: 'border-green-300',  icon: 'bg-green-100 text-green-600',  text: 'text-green-700'  },
-  purple: { ring: 'ring-purple-300', bg: 'bg-purple-50', border: 'border-purple-300', icon: 'bg-purple-100 text-purple-600', text: 'text-purple-700' },
-};
+function Field({ label, children }) {
+  return (
+    <div className="space-y-1.5">
+      <label className="block text-xs font-semibold text-slate-500 uppercase tracking-widest">
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+const INPUT_CLS = `w-full px-4 py-3 rounded-lg border border-slate-200 bg-slate-50
+  text-slate-800 placeholder-slate-300 text-sm
+  focus:outline-none focus:ring-2 focus:ring-[#1D6DB8]/30 focus:border-[#1D6DB8] transition`;
 
 export default function LoginPage() {
   const { signIn, signUp } = useAuth();
 
-  const [mode,     setMode]     = useState('login');   // 'login' | 'signup'
+  const [mode,     setMode]     = useState('login');
   const [role,     setRole]     = useState('');
   const [email,    setEmail]    = useState('');
   const [password, setPassword] = useState('');
@@ -62,18 +39,24 @@ export default function LoginPage() {
   const [error,    setError]    = useState('');
   const [success,  setSuccess]  = useState('');
 
+  function switchMode(m) {
+    setMode(m);
+    setError('');
+    setSuccess('');
+    setRole('');
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
     setSuccess('');
 
     if (mode === 'signup' && !role) {
-      setError('Please select your role before signing up.');
+      setError('Please select your role to continue.');
       return;
     }
 
     setLoading(true);
-
     if (mode === 'login') {
       const { error: err } = await signIn({ email, password });
       if (err) setError(err.message);
@@ -82,198 +65,134 @@ export default function LoginPage() {
       if (err) setError(err.message);
       else setSuccess('Account created! Check your email to confirm, then sign in.');
     }
-
     setLoading(false);
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-100 flex items-center justify-center p-4">
-      <div className="w-full max-w-4xl">
+    <div className="min-h-screen bg-[#f4f6fa] flex flex-col items-center justify-center p-4">
 
-        {/* Header */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center shadow-md">
-              <Bus size={20} className="text-white" />
-            </div>
-            <span className="text-2xl font-bold text-slate-900">FleetOS</span>
+      {/* Card */}
+      <div className="w-full max-w-sm bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden">
+
+        {/* Top band */}
+        <div className="h-1.5 bg-[#1D6DB8]" />
+
+        <div className="px-8 pt-8 pb-9">
+
+          {/* Tata logo */}
+          <div className="flex flex-col items-center mb-7">
+            <img
+              src="/tata-logo.svg"
+              alt="Tata Motors"
+              className="h-16 w-auto mb-3"
+            />
+            <h1 className="text-slate-800 font-bold text-xl tracking-tight">FleetOS</h1>
+            <p className="text-slate-400 text-sm mt-0.5">
+              {mode === 'login' ? 'Sign in to continue' : 'Create your account'}
+            </p>
           </div>
-          <p className="text-slate-500 text-sm">Smart mobility platform by Tata Motors CV</p>
-        </div>
 
-        <div className="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
-          <div className="grid grid-cols-1 lg:grid-cols-5">
+          <form onSubmit={handleSubmit} className="space-y-4">
 
-            {/* Left panel — role cards (only shown for signup) */}
-            <div className={cn(
-              'lg:col-span-3 p-6 border-b lg:border-b-0 lg:border-r border-slate-100',
-              mode === 'login' && 'hidden lg:block'
-            )}>
-              <p className="text-slate-800 font-semibold mb-1">
-                {mode === 'signup' ? 'Who are you?' : 'Welcome back'}
-              </p>
-              <p className="text-slate-400 text-xs mb-5">
-                {mode === 'signup'
-                  ? 'Select your role — this determines which features you can access'
-                  : 'Sign in to access your FleetOS dashboard'}
-              </p>
+            {mode === 'signup' && (
+              <Field label="Full Name">
+                <input
+                  type="text"
+                  required
+                  value={fullName}
+                  onChange={e => setFullName(e.target.value)}
+                  placeholder="Ravi Sharma"
+                  className={INPUT_CLS}
+                />
+              </Field>
+            )}
 
-              {mode === 'signup' ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                  {ROLES.map(r => {
-                    const c = COLOR_MAP[r.color];
-                    const Icon = r.icon;
-                    const isSelected = role === r.id;
-                    return (
-                      <button
-                        key={r.id}
-                        type="button"
-                        onClick={() => setRole(r.id)}
-                        className={cn(
-                          'text-left p-4 rounded-xl border-2 transition-all',
-                          isSelected
-                            ? `${c.bg} ${c.border} ring-2 ${c.ring} ring-offset-1`
-                            : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-                        )}
-                      >
-                        <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center mb-3', c.icon)}>
-                          <Icon size={18} />
-                        </div>
-                        <p className={cn('font-semibold text-sm', isSelected ? c.text : 'text-slate-800')}>
-                          {r.label}
-                        </p>
-                        <p className="text-slate-400 text-xs mt-0.5 leading-snug">{r.desc}</p>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : (
-                /* Login left side — product overview */
-                <div className="space-y-4">
-                  {ROLES.map(r => {
-                    const c = COLOR_MAP[r.color];
-                    const Icon = r.icon;
-                    return (
-                      <div key={r.id} className="flex items-center gap-3">
-                        <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0', c.icon)}>
-                          <Icon size={15} />
-                        </div>
-                        <div>
-                          <p className="text-slate-700 text-sm font-medium">{r.label}</p>
-                          <p className="text-slate-400 text-xs">{r.desc}</p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+            <Field label="Email">
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className={INPUT_CLS}
+              />
+            </Field>
 
-            {/* Right panel — form */}
-            <div className="lg:col-span-2 p-6 flex flex-col justify-center">
-              <h2 className="text-slate-800 font-semibold text-lg mb-1">
-                {mode === 'login' ? 'Sign in' : 'Create account'}
-              </h2>
-              <p className="text-slate-400 text-xs mb-6">
-                {mode === 'login'
-                  ? 'Enter your credentials to continue'
-                  : 'Fill in your details to get started'}
-              </p>
-
-              <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-
-                {mode === 'signup' && (
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1.5">Full name</label>
-                    <input
-                      type="text"
-                      required
-                      value={fullName}
-                      onChange={e => setFullName(e.target.value)}
-                      placeholder="Ravi Sharma"
-                      className="w-full px-3 py-2.5 rounded-lg border border-slate-200 bg-slate-50
-                        text-slate-800 placeholder-slate-400 text-sm
-                        focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-300 transition"
-                    />
-                  </div>
-                )}
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">Email address</label>
-                  <input
-                    type="email"
-                    required
-                    value={email}
-                    onChange={e => setEmail(e.target.value)}
-                    placeholder="you@example.com"
-                    className="w-full px-3 py-2.5 rounded-lg border border-slate-200 bg-slate-50
-                      text-slate-800 placeholder-slate-400 text-sm
-                      focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-300 transition"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">Password</label>
-                  <div className="relative">
-                    <input
-                      type={showPwd ? 'text' : 'password'}
-                      required
-                      minLength={6}
-                      value={password}
-                      onChange={e => setPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full px-3 py-2.5 pr-10 rounded-lg border border-slate-200 bg-slate-50
-                        text-slate-800 placeholder-slate-400 text-sm
-                        focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-300 transition"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPwd(p => !p)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition"
-                    >
-                      {showPwd ? <EyeOff size={15} /> : <Eye size={15} />}
-                    </button>
-                  </div>
-                </div>
-
-                {error && (
-                  <div className="bg-red-50 border border-red-200 text-red-600 text-xs rounded-lg px-3 py-2.5">
-                    {error}
-                  </div>
-                )}
-                {success && (
-                  <div className="bg-green-50 border border-green-200 text-green-700 text-xs rounded-lg px-3 py-2.5">
-                    {success}
-                  </div>
-                )}
-
+            <Field label="Password">
+              <div className="relative">
+                <input
+                  type={showPwd ? 'text' : 'password'}
+                  required
+                  minLength={6}
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className={cn(INPUT_CLS, 'pr-11')}
+                />
                 <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm
-                    py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-60"
+                  type="button"
+                  onClick={() => setShowPwd(p => !p)}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition"
                 >
-                  {loading && <Loader2 size={14} className="animate-spin" />}
-                  {mode === 'login' ? 'Sign in' : 'Create account'}
+                  {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
-              </form>
+              </div>
+            </Field>
 
-              <p className="text-center text-xs text-slate-400 mt-5">
-                {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
-                <button
-                  onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setError(''); setSuccess(''); }}
-                  className="text-blue-600 hover:text-blue-700 font-medium transition-colors"
+            {mode === 'signup' && (
+              <Field label="Role">
+                <select
+                  required
+                  value={role}
+                  onChange={e => setRole(e.target.value)}
+                  className={cn(INPUT_CLS, 'cursor-pointer appearance-none')}
                 >
-                  {mode === 'login' ? 'Sign up' : 'Sign in'}
-                </button>
-              </p>
-            </div>
+                  <option value="" disabled>Select your role…</option>
+                  {ROLES.map(r => (
+                    <option key={r.id} value={r.id}>{r.label}</option>
+                  ))}
+                </select>
+              </Field>
+            )}
 
-          </div>
+            {error && (
+              <div className="bg-red-50 border border-red-200 text-red-600 text-xs rounded-lg px-4 py-3 leading-relaxed">
+                {error}
+              </div>
+            )}
+            {success && (
+              <div className="bg-green-50 border border-green-200 text-green-700 text-xs rounded-lg px-4 py-3 leading-relaxed">
+                {success}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full mt-1 py-3 rounded-lg bg-[#1D6DB8] hover:bg-[#1558a0] active:scale-[0.98]
+                text-white font-semibold text-sm tracking-wide transition-all
+                flex items-center justify-center gap-2 disabled:opacity-60 shadow-sm"
+            >
+              {loading && <Loader2 size={15} className="animate-spin" />}
+              {mode === 'login' ? 'Sign in' : 'Create account'}
+            </button>
+          </form>
+
+          <p className="text-center text-xs text-slate-400 mt-6">
+            {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
+            <button
+              onClick={() => switchMode(mode === 'login' ? 'signup' : 'login')}
+              className="text-[#1D6DB8] hover:text-[#1558a0] font-semibold transition-colors"
+            >
+              {mode === 'login' ? 'Sign up' : 'Sign in'}
+            </button>
+          </p>
         </div>
-
-        <p className="text-center text-slate-400 text-xs mt-5">v1.0 · TAS Internship 2026</p>
       </div>
+
+      <p className="text-slate-400 text-xs mt-6">
+        Tata Motors · CV Passenger Division · &copy; 2026
+      </p>
     </div>
   );
 }
