@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { FleetConfigProvider } from './contexts/FleetConfigContext';
+import { FleetConfigProvider, useFleetConfig } from './contexts/FleetConfigContext';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 import OnboardingWizard from './pages/OnboardingWizard';
@@ -57,13 +57,19 @@ function AppShell() {
   const { user, profile, loading, isOnboarded, isDemoMode } = useAuth();
   const { buses, alerts, connected, ...telemetry } = useTelemetry();
   const { incidents, updateStatus } = useAlerts(alerts);
+  const { updateConfig } = useFleetConfig();
 
   const defaultPage = profile ? (ROLE_HOME[profile.role] ?? 'fleet-map') : 'fleet-map';
   const [activePage, setActivePage] = useState(defaultPage);
 
   // Sync Fleet Setup buses/drivers to the backend simulator once on login
+  // and update the deployed bus count in the Control Center config
   useEffect(() => {
-    if (user) syncFleetToBackend(user.id);
+    if (user) {
+      syncFleetToBackend(user.id).then(count => {
+        if (count > 0) updateConfig({ deployedBusCount: count });
+      });
+    }
   }, [user?.id]);
 
   // When profile first loads (async after session), jump to the correct home page

@@ -209,7 +209,7 @@ function CoachingNotes({ driver }) {
             placeholder-slate-400 transition-colors"
           rows={3}
           maxLength={maxChars}
-          placeholder={`What should ${driver.name.split(' ')[0]} focus on? (${maxChars} chars max)`}
+          placeholder={`What should ${(driver.name || 'this driver').split(' ')[0]} focus on? (${maxChars} chars max)`}
           value={newNote}
           onChange={e => setNewNote(e.target.value)}
         />
@@ -406,15 +406,22 @@ export default function FleetDrivers({ fetchDrivers }) {
 
   useEffect(() => {
     async function load() {
-      setLoading(true);
-      const data = await fetchDrivers();
-      setDrivers(data);
-      setLoading(false);
+      try {
+        setLoading(true);
+        const data = await fetchDrivers();
+        setDrivers(Array.isArray(data) ? data : []);
+      } catch {
+        setDrivers([]);
+      } finally {
+        setLoading(false);
+      }
     }
     load();
     const interval = setInterval(async () => {
-      const data = await fetchDrivers();
-      setDrivers(data);
+      try {
+        const data = await fetchDrivers();
+        if (Array.isArray(data)) setDrivers(data);
+      } catch { /* ignore — keep previous data */ }
     }, 10000);
     return () => clearInterval(interval);
   }, [fetchDrivers]);

@@ -594,9 +594,24 @@ export default function FleetSetup() {
   const [busCount,    setBusCount]    = useState(0);
   const [driverCount, setDriverCount] = useState(0);
 
-  const handleFleetChanged = useCallback(() => {
-    syncFleetToBackend(user.id);
+  // Load counts immediately on mount — don't wait for a tab to activate
+  useEffect(() => {
+    if (!user) return;
+    supabase.from('fleet_buses').select('id', { count: 'exact', head: true })
+      .eq('operator_id', user.id).eq('is_active', true)
+      .then(({ count }) => { if (count != null) setBusCount(count); });
+    supabase.from('fleet_drivers').select('id', { count: 'exact', head: true })
+      .eq('operator_id', user.id).eq('is_active', true)
+      .then(({ count }) => { if (count != null) setDriverCount(count); });
   }, [user?.id]);
+
+  const { updateConfig } = useFleetConfig();
+
+  const handleFleetChanged = useCallback(() => {
+    syncFleetToBackend(user.id).then(count => {
+      if (count > 0) updateConfig({ deployedBusCount: count });
+    });
+  }, [user?.id, updateConfig]);
 
   if (!user) return null;
 

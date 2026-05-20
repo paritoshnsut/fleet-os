@@ -47,21 +47,24 @@ app.get('/api/buses/:busId', (req, res) => {
   res.json({ ...bus, driverScore: calcDriverScore(bus) });
 });
 
-// All drivers with scores
+// All drivers with scores — derived from live busStates so count always matches Fleet Setup
 app.get('/api/drivers', (req, res) => {
-  const result = drivers.map(driver => {
-    const bus = busStates.find(b => b.busId === driver.busId);
-    return {
-      ...driver,
-      score: bus ? calcDriverScore(bus) : 100,
-      harshBraking: bus?.harshBrakingCount || 0,
-      harshAccel:   bus?.harshAccelCount   || 0,
-      overspeed:    bus?.overspeedCount     || 0,
-      kmToday:      bus?.kmToday            || 0,
-      speed:        bus?.speed              || 0,
-    };
-  });
-  // Sort by score descending
+  const result = busStates.map((bus, i) => ({
+    id:           bus.driverId,
+    name:         bus.driverName || 'Unassigned',
+    busId:        bus.busId,
+    routeId:      bus.routeId,
+    routeName:    bus.routeName,
+    routeNo:      bus.routeNo,
+    age:          30 + (i * 7 % 20),
+    experience:   3  + (i * 5 % 18),
+    score:        calcDriverScore(bus),
+    harshBraking: bus.harshBrakingCount || 0,
+    harshAccel:   bus.harshAccelCount   || 0,
+    overspeed:    bus.overspeedCount    || 0,
+    kmToday:      bus.kmToday           || 0,
+    speed:        bus.speed             || 0,
+  }));
   result.sort((a, b) => b.score - a.score);
   res.json(result);
 });
