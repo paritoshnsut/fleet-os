@@ -6,6 +6,7 @@ import {
   MessageSquare, Send, CheckCheck, Bell
 } from 'lucide-react';
 import { cn, getScoreBg, formatINR } from '../lib/utils';
+import { useFleetConfig } from '../contexts/FleetConfigContext';
 
 function ScoreRing({ score }) {
   const radius        = 28;
@@ -350,8 +351,8 @@ function DriverRow({ driver, rank, isExpanded, onToggle }) {
 
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mt-3">
               <p className="text-slate-500 text-xs mb-1">Revenue contributed today</p>
-              <p className="text-blue-700 text-lg font-bold">{formatINR(driver.kmToday * 56.5)}</p>
-              <p className="text-slate-400 text-xs">@ ₹56.5/km GCC rate</p>
+              <p className="text-blue-700 text-lg font-bold">{formatINR(driver.kmToday * gccDriverRatePerKm)}</p>
+              <p className="text-slate-400 text-xs">@ ₹{gccDriverRatePerKm}/km GCC rate</p>
             </div>
 
             {driver.score < 80 && (
@@ -394,6 +395,9 @@ function DriverRow({ driver, rank, isExpanded, onToggle }) {
 }
 
 export default function FleetDrivers({ fetchDrivers }) {
+  const { config } = useFleetConfig();
+  const { overspeedThreshold, gccDriverRatePerKm } = config;
+
   const [drivers,     setDrivers]     = useState([]);
   const [loading,     setLoading]     = useState(true);
   const [expandedId,  setExpandedId]  = useState(null);

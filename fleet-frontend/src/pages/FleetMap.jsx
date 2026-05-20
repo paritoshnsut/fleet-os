@@ -6,6 +6,7 @@ import {
   AlertTriangle, X
 } from 'lucide-react';
 import { cn, getSpeedColor, formatINR } from '../lib/utils';
+import { useFleetConfig } from '../contexts/FleetConfigContext';
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -20,10 +21,10 @@ const ROUTE_COLORS = {
   R7: '#f97316', R8: '#ec4899',
 };
 
-function createBusIcon(speed, fuelType) {
-  const color = speed > 65 ? '#ef4444' : speed > 50 ? '#f97316' : '#22c55e';
+function createBusIcon(speed, fuelType, threshold = 65) {
+  const color = speed > threshold ? '#ef4444' : speed > 50 ? '#f97316' : '#22c55e';
   const symbol = fuelType === 'Electric' ? '⚡' : '⛽';
-  const pulse = speed > 65
+  const pulse = speed > threshold
     ? `<div style="position:absolute;inset:-4px;border-radius:50%;
         background:${color}33;animation:ping 1s cubic-bezier(0,0,0.2,1) infinite;"></div>`
     : '';
@@ -112,6 +113,9 @@ function stableKey(a) {
 
 /* ══════════════════════════════════════════════════════ */
 export default function FleetMap({ buses, alerts }) {
+  const { config } = useFleetConfig();
+  const { overspeedThreshold, gccRatePerKm, deployedBusCount } = config;
+
   const [routes,     setRoutes]     = useState([]);
   const [showRoutes, setShowRoutes] = useState(true);
   const [filterFuel, setFilterFuel] = useState('all');
@@ -167,27 +171,25 @@ export default function FleetMap({ buses, alerts }) {
   );
 
   const avgSpeed  = buses.length ? Math.round(buses.reduce((s, b) => s + b.speed, 0) / buses.length) : 0;
-  const overspeed = buses.filter(b => b.speed > 65).length;
-  const totalPax  = buses.reduce((s, b) => s + (b.passengerLoad || 0), 0);
+  const overspeed = buses.filter(b => b.speed > overspeedThreshold).length;
   const evBuses   = buses.filter(b => b.fuelType === 'Electric');
   const avgSOC    = evBuses.length
     ? Math.round(evBuses.reduce((s, b) => s + (b.soc || 0), 0) / evBuses.length) : 0;
-  const totalRev  = buses.reduce((s, b) => s + (b.kmToday || 0) * 80, 0);
+  const totalRev  = buses.reduce((s, b) => s + (b.kmToday || 0) * gccRatePerKm, 0);
 
   return (
     <div className="flex flex-col gap-4 h-full">
 
       {/* Summary bar */}
       <div className="flex items-center gap-3 flex-wrap">
-        <StatCard label="Buses Live"    value={buses.length}        sub="of 8 deployed" />
+        <StatCard label="Buses Live"    value={buses.length}        sub={`of ${deployedBusCount} deployed`} />
         <StatCard label="Avg Speed"     value={`${avgSpeed} km/h`}  sub="fleet average"
           color={avgSpeed > 55 ? 'text-orange-600' : 'text-slate-900'} />
-        <StatCard label="Overspeed"     value={overspeed}           sub="buses >65 km/h"
+        <StatCard label="Overspeed"     value={overspeed}           sub={`buses >${overspeedThreshold} km/h`}
           color={overspeed > 0 ? 'text-red-600' : 'text-green-600'} />
-        <StatCard label="Passengers"    value={totalPax}            sub="on board now" />
-        <StatCard label="Avg EV SOC"    value={`${avgSOC}%`}        sub="5 electric buses"
+        <StatCard label="Avg EV SOC"    value={`${avgSOC}%`}        sub={`${evBuses.length} electric buses`}
           color={avgSOC < 30 ? 'text-red-600' : 'text-green-600'} />
-        <StatCard label="Revenue Today" value={formatINR(totalRev)} sub="GCC ₹80/km"
+        <StatCard label="Revenue Today" value={formatINR(totalRev)} sub={`GCC ₹${gccRatePerKm}/km`}
           color="text-blue-600" />
       </div>
 
@@ -236,7 +238,7 @@ export default function FleetMap({ buses, alerts }) {
                 <Marker
                   key={bus.busId}
                   position={[bus.lat, bus.lng]}
-                  icon={createBusIcon(bus.speed, bus.fuelType)}
+                  icon={createBusIcon(bus.speed, bus.fuelType, overspeedThreshold)}
                 >
                   <Popup maxWidth={240}>
                     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '4px' }}>
@@ -331,8 +333,8 @@ export default function FleetMap({ buses, alerts }) {
             <p className="text-slate-500 text-xs mb-2 font-medium">Speed</p>
             {[
               { color: '#22c55e', label: 'Normal <50' },
-              { color: '#f97316', label: 'Moderate 50–65' },
-              { color: '#ef4444', label: 'Overspeed >65' },
+              { color: '#f97316', label: `Moderate 50–${overspeedThreshold}` },
+              { color: '#ef4444', label: `Overspeed >${overspeedThreshold}` },
             ].map(({ color, label }) => (
               <div key={label} className="flex items-center gap-2 mb-1">
                 <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { FleetConfigProvider } from './contexts/FleetConfigContext';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 import OnboardingWizard from './pages/OnboardingWizard';
@@ -134,7 +135,9 @@ function AppShell() {
 export default function App() {
   return (
     <AuthProvider>
-      <AppShell />
+      <FleetConfigProvider>
+        <AppShell />
+      </FleetConfigProvider>
     </AuthProvider>
   );
 }

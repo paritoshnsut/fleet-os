@@ -1,17 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Bus, Users, Settings, Plus, Trash2, Pencil, CheckCircle,
-  Zap, Fuel, Save, X, Loader2, AlertTriangle, RefreshCw,
+  Zap, Fuel, Save, X, Loader2, AlertTriangle, RefreshCw, SlidersHorizontal,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
+import { useFleetConfig } from '../contexts/FleetConfigContext';
 
 const CONTRACT_LABELS = { gcc: 'GCC', private: 'Private', both: 'GCC + Private' };
 const TABS = [
-  { id: 'buses',   label: 'Buses',    icon: Bus      },
-  { id: 'drivers', label: 'Drivers',  icon: Users    },
-  { id: 'settings', label: 'Settings', icon: Settings },
+  { id: 'buses',    label: 'Buses',           icon: Bus                },
+  { id: 'drivers',  label: 'Drivers',         icon: Users              },
+  { id: 'settings', label: 'Settings',        icon: Settings           },
+  { id: 'control',  label: 'Control Center',  icon: SlidersHorizontal  },
 ];
 
 // ── Reusable field ─────────────────────────────────────────────────────────────
@@ -503,6 +505,87 @@ function SettingsTab() {
   );
 }
 
+// ── Control Center tab ────────────────────────────────────────────────────────
+function ControlCenterTab() {
+  const { config, updateConfig } = useFleetConfig();
+  const [form, setForm] = useState({ ...config });
+  const [saved, setSaved] = useState(false);
+
+  function handleSave() {
+    updateConfig({
+      overspeedThreshold:   Number(form.overspeedThreshold),
+      gccRatePerKm:         Number(form.gccRatePerKm),
+      gccDriverRatePerKm:   Number(form.gccDriverRatePerKm),
+      deployedBusCount:     Number(form.deployedBusCount),
+    });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  }
+
+  const fields = [
+    {
+      key: 'overspeedThreshold',
+      label: 'Overspeed threshold (km/h)',
+      hint: 'Buses above this speed are flagged red on Live Map and Driver Scorecards.',
+      min: 40, max: 120, step: 1,
+    },
+    {
+      key: 'gccRatePerKm',
+      label: 'GCC revenue rate (₹ / km)',
+      hint: 'Used to calculate Revenue Today on Live Map and GCC Compliance billing.',
+      min: 1, max: 500, step: 0.5,
+    },
+    {
+      key: 'gccDriverRatePerKm',
+      label: 'Driver GCC rate (₹ / km)',
+      hint: 'Used in Driver Scorecards to compute individual revenue contribution.',
+      min: 1, max: 500, step: 0.5,
+    },
+    {
+      key: 'deployedBusCount',
+      label: 'Total deployed buses',
+      hint: 'Shown as "of N deployed" in the Live Map header.',
+      min: 1, max: 200, step: 1,
+    },
+  ];
+
+  return (
+    <div className="max-w-lg space-y-5">
+      <p className="text-slate-500 text-sm">
+        Changes apply instantly across all Fleet Intelligence pages without a code deploy.
+      </p>
+
+      {fields.map(({ key, label, hint, min, max, step }) => (
+        <div key={key}>
+          <label className="block text-xs font-medium text-slate-700 mb-1">{label}</label>
+          <input
+            type="number"
+            min={min}
+            max={max}
+            step={step}
+            value={form[key]}
+            onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}
+            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-800
+              focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-300"
+          />
+          <p className="text-slate-400 text-xs mt-1">{hint}</p>
+        </div>
+      ))}
+
+      <button
+        onClick={handleSave}
+        className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700
+          text-white font-medium text-sm rounded-xl transition-colors"
+      >
+        {saved
+          ? <><CheckCircle size={14} /> Saved!</>
+          : <><Save size={14} /> Apply changes</>
+        }
+      </button>
+    </div>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────────
 export default function FleetSetup() {
   const { profile, user } = useAuth();
@@ -568,6 +651,7 @@ export default function FleetSetup() {
           {tab === 'buses'   && <BusesTab   operatorId={user.id} onCountChange={setBusCount}    />}
           {tab === 'drivers' && <DriversTab operatorId={user.id} onCountChange={setDriverCount} />}
           {tab === 'settings' && <SettingsTab />}
+          {tab === 'control'  && <ControlCenterTab />}
         </div>
       </div>
     </div>

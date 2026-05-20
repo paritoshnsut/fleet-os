@@ -5,6 +5,7 @@ import {
   IndianRupee, Truck, Activity, XCircle
 } from 'lucide-react';
 import { cn, getPSMColor, formatINR } from '../lib/utils';
+import { useFleetConfig } from '../contexts/FleetConfigContext';
 
 function KmProgressBar({ actual, contracted }) {
   const pct   = Math.min(100, (actual / contracted) * 100);
@@ -68,6 +69,8 @@ function SummaryCard({ icon: Icon, label, value, sub, color = 'text-slate-900', 
 }
 
 function GCCRow({ row, isExpanded, onToggle }) {
+  const { config } = useFleetConfig();
+  const { gccRatePerKm } = config;
   return (
     <div className={cn(
       'bg-white border rounded-xl overflow-hidden transition-all shadow-sm',
@@ -125,7 +128,7 @@ function GCCRow({ row, isExpanded, onToggle }) {
               Contract Details
             </p>
             {[
-              { label: 'GCC Rate',          value: '₹80 / km'                 },
+              { label: 'GCC Rate',          value: `₹${gccRatePerKm} / km`    },
               { label: 'Contracted KM/day', value: `${row.contractedKm} km`   },
               { label: 'Actual KM today',   value: `${row.kmToday} km`        },
               { label: 'KM shortfall',      value: `${Math.max(0, row.contractedKm - row.kmToday)} km` },
