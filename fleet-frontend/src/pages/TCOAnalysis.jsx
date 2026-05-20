@@ -273,24 +273,25 @@ function calcParityTables(evParams, dslParams) {
   const baseECP = evParams.ecp;
   const ecpRows = ECP_FACTORS.map(f => baseECP * f);
 
-  const dslBaseEAP = buildLifecycle(dslParams).totalEAP;
-  const dslEAPByKm = KM_COLS.map(km =>
-    buildLifecycle({ ...dslParams, kmPerDay: km }).totalEAP
-  );
+  const dslBase      = buildLifecycle(dslParams);
+  const dslBaseEAP   = dslBase.totalEAP;
+  const dslBaseRows  = dslBase.eapPerRow;
+
+  const dslByKm = KM_COLS.map(km => buildLifecycle({ ...dslParams, kmPerDay: km }));
 
   const table1 = ecpRows.map(ecp => ({
     ecp,
     cells: EFF_COLS.map(eff => {
-      const evEAP = buildLifecycle({ ...evParams, ecp, fuelEfficiency: eff }).totalEAP;
-      return { diff: evEAP - dslBaseEAP, evEAP, dslEAP: dslBaseEAP };
+      const ev = buildLifecycle({ ...evParams, ecp, fuelEfficiency: eff });
+      return { diff: ev.totalEAP - dslBaseEAP, evEAP: ev.totalEAP, dslEAP: dslBaseEAP, evRows: ev.eapPerRow, dslRows: dslBaseRows };
     }),
   }));
 
   const table2 = ecpRows.map(ecp => ({
     ecp,
     cells: KM_COLS.map((km, j) => {
-      const evEAP = buildLifecycle({ ...evParams, ecp, kmPerDay: km }).totalEAP;
-      return { diff: evEAP - dslEAPByKm[j], evEAP, dslEAP: dslEAPByKm[j] };
+      const ev = buildLifecycle({ ...evParams, ecp, kmPerDay: km });
+      return { diff: ev.totalEAP - dslByKm[j].totalEAP, evEAP: ev.totalEAP, dslEAP: dslByKm[j].totalEAP, evRows: ev.eapPerRow, dslRows: dslByKm[j].eapPerRow };
     }),
   }));
 
@@ -533,6 +534,18 @@ const ROW_ORDER = [
   'Battery replacement cost',
 ];
 
+const ROW_SHORT = {
+  'Bus Capitalization Cost':               'Bus Capex',
+  'Vehicle Insurance':                     'Insurance',
+  'Charging Infra Capitalization Cost':    'Charger Capex',
+  'Charger AMC Cost':                      'Charger AMC',
+  'Fuel Cost':                             'Fuel / Energy',
+  'Manpower cost (Driver + Conductor)':    'Manpower',
+  'Bus AMC Cost (Manpower + Materials)':   'Bus AMC',
+  'Other Misc.':                           'Misc',
+  'Battery replacement cost':              'Battery Repl.',
+};
+
 const ROW_COLOR = {
   'Bus Capitalization Cost': 'text-indigo-700',
   'Vehicle Insurance': 'text-slate-600',
@@ -612,32 +625,49 @@ function ParityHeatmap({ title, data, colHeaders, colUnit, currentECPRow, curren
     <div className="relative">
       <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">{title}</p>
 
-      {/* Hover tooltip */}
+      {/* Hover tooltip — full EAP breakdown */}
       {tooltip && (
         <div
-          className="fixed z-[9999] bg-slate-900 text-white text-xs rounded-xl p-3 pointer-events-none shadow-2xl border border-slate-700"
-          style={{ left: tooltip.x + 14, top: tooltip.y - 10 }}
+          className="fixed z-[9999] bg-slate-900 text-white text-[11px] rounded-xl pointer-events-none shadow-2xl border border-slate-700"
+          style={{ left: Math.min(tooltip.x + 14, window.innerWidth - 320), top: Math.max(tooltip.y - 20, 8), width: 300 }}
         >
-          <p className="font-semibold text-slate-300 mb-2 text-[11px]">{tooltip.label}</p>
-          <div className="space-y-1">
-            <p className="flex justify-between gap-6">
-              <span className="text-slate-400">EV EAP</span>
-              <span className="text-blue-300 font-mono">₹{tooltip.evEAP.toFixed(2)}/km</span>
+          <div className="px-4 py-2.5 border-b border-slate-700">
+            <p className="font-bold text-white text-xs">{tooltip.label}</p>
+            <p className="text-slate-400 text-[10px] mt-0.5">
+              EAP = NPV(all costs) ÷ NPV(all km) — discounted at 10% p.a.
             </p>
-            <p className="flex justify-between gap-6">
-              <span className="text-slate-400">DSL EAP</span>
-              <span className="text-orange-300 font-mono">₹{tooltip.dslEAP.toFixed(2)}/km</span>
-            </p>
-            <div className="border-t border-slate-700 pt-1 mt-1 flex justify-between gap-6">
-              <span className="text-slate-400">Difference</span>
-              <span className={cn('font-mono font-bold', tooltip.diff < 0 ? 'text-green-400' : 'text-red-400')}>
-                {tooltip.diff > 0 ? '+' : ''}{tooltip.diff.toFixed(2)}/km
-              </span>
+          </div>
+
+          <div className="px-4 py-2.5 grid grid-cols-2 gap-x-4 border-b border-slate-700">
+            {/* EV column */}
+            <div>
+              <p className="text-blue-400 font-semibold mb-1.5">⚡ EV — ₹{tooltip.evEAP.toFixed(2)}/km</p>
+              {ROW_ORDER.filter(r => tooltip.evRows[r] && Math.abs(tooltip.evRows[r]) > 0.001).map(r => (
+                <div key={r} className="flex justify-between gap-2 mb-0.5">
+                  <span className="text-slate-400 truncate">{ROW_SHORT[r] ?? r}</span>
+                  <span className="text-slate-200 font-mono flex-shrink-0">{tooltip.evRows[r].toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+            {/* DSL column */}
+            <div>
+              <p className="text-orange-400 font-semibold mb-1.5">⛽ DSL — ₹{tooltip.dslEAP.toFixed(2)}/km</p>
+              {ROW_ORDER.filter(r => tooltip.dslRows[r] && Math.abs(tooltip.dslRows[r]) > 0.001).map(r => (
+                <div key={r} className="flex justify-between gap-2 mb-0.5">
+                  <span className="text-slate-400 truncate">{ROW_SHORT[r] ?? r}</span>
+                  <span className="text-slate-200 font-mono flex-shrink-0">{tooltip.dslRows[r].toFixed(2)}</span>
+                </div>
+              ))}
             </div>
           </div>
-          <p className={cn('text-[10px] mt-2 font-medium', tooltip.diff < 0 ? 'text-green-400' : 'text-red-400')}>
-            {tooltip.diff < 0 ? '✓ EV is cheaper than Diesel' : '✗ Diesel is cheaper than EV'}
-          </p>
+
+          <div className="px-4 py-2.5 flex items-center justify-between">
+            <span className="text-slate-400">EV vs DSL Difference</span>
+            <span className={cn('font-mono font-bold text-xs', tooltip.diff < 0 ? 'text-green-400' : 'text-red-400')}>
+              {tooltip.diff > 0 ? '+' : ''}₹{tooltip.diff.toFixed(2)}/km &nbsp;
+              {tooltip.diff < 0 ? '✓ EV wins' : '✗ DSL wins'}
+            </span>
+          </div>
         </div>
       )}
 
@@ -691,6 +721,7 @@ function ParityHeatmap({ title, data, colHeaders, colUnit, currentECPRow, curren
                       onMouseMove={e => setTooltip({
                         x: e.clientX, y: e.clientY,
                         evEAP: cell.evEAP, dslEAP: cell.dslEAP, diff: v,
+                        evRows: cell.evRows, dslRows: cell.dslRows,
                         label: `ECP ₹${(row.ecp / 100000).toFixed(1)}L · ${colHeaders[j]}${colUnit ? ' ' + colUnit : ''}`,
                       })}
                     >
@@ -741,6 +772,7 @@ export default function TCOAnalysis() {
   const [parityData, setParityData] = useState(null);
   const [isPrinting, setIsPrinting] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [cardTooltip, setCardTooltip] = useState(null);
   const fileRef = useRef();
   const resultsRef = useRef(null);
 
@@ -1229,21 +1261,121 @@ export default function TCOAnalysis() {
                 </div>
               )}
 
-              {/* ── Summary Cards ─── */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {[
-                  { label: '⚡ EV EAP', value: `₹${results.totalEAP.toFixed(2)}/km`, sub: 'Equiv. annualized cost', color: 'text-blue-700' },
-                  { label: '⛽ DSL EAP', value: dslResults ? `₹${dslResults.totalEAP.toFixed(2)}/km` : 'Run calc.', sub: 'Equiv. annualized cost', color: 'text-orange-700' },
-                  { label: 'Annual km', value: fmt(results.annualKm), sub: 'km/year per bus', color: 'text-slate-800' },
-                  { label: 'EV Fuel share', value: `${((results.eapPerRow?.['Fuel Cost'] || 0) / results.totalEAP * 100).toFixed(1)}%`, sub: 'of EV total EAP', color: 'text-slate-800' },
-                ].map(c => (
-                  <div key={c.label} className="bg-white rounded-xl border border-slate-200 p-4">
-                    <p className="text-slate-400 text-xs mb-1">{c.label}</p>
-                    <p className={cn('font-bold text-lg leading-tight', c.color)}>{c.value}</p>
-                    <p className="text-slate-400 text-[11px] mt-0.5">{c.sub}</p>
-                  </div>
-                ))}
+              {/* ── EAP / ECP Glossary ── */}
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] px-1">
+                <span className="text-slate-500">
+                  <span className="font-semibold text-slate-700">EAP</span>
+                  {' '}— Equivalent Annualized ₹/km = NPV(all costs) ÷ NPV(all km) at 10% p.a. discount rate
+                </span>
+                <span className="text-slate-400 hidden sm:inline">·</span>
+                <span className="text-slate-500">
+                  <span className="font-semibold text-slate-700">ECP</span>
+                  {' '}— Ex-Chassis Price = retail price + taxes (full landed cost of the bus before loan)
+                </span>
               </div>
+
+              {/* ── Summary Cards ─── */}
+              {(() => {
+                const evNpvKm   = calcNPV(Array(results.years).fill(results.annualKm), 0.10);
+                const evNpvCost = results.totalEAP * evNpvKm;
+                const dslNpvKm   = dslResults ? calcNPV(Array(dslResults.years).fill(dslResults.annualKm), 0.10) : null;
+                const dslNpvCost = dslResults ? dslResults.totalEAP * dslNpvKm : null;
+                const fuelEAP    = results.eapPerRow?.['Fuel Cost'] || 0;
+                const fuelPct    = (fuelEAP / results.totalEAP * 100);
+
+                const cards = [
+                  {
+                    label: '⚡ EV EAP',
+                    value: `₹${results.totalEAP.toFixed(2)}/km`,
+                    sub: 'Equiv. annualized cost',
+                    color: 'text-blue-700',
+                    tooltipLines: [
+                      { label: `${params.kmPerDay} km/day × ${params.operationalDays} days`, value: `${fmt(results.annualKm)} km/yr` },
+                      { label: `NPV km (10%, ${results.years} yrs)`, value: `${fmt(Math.round(evNpvKm))} km` },
+                      { label: 'NPV total costs', value: `₹${fmt(Math.round(evNpvCost))}` },
+                      { label: 'EAP = NPV costs ÷ NPV km', value: `₹${results.totalEAP.toFixed(2)}/km`, highlight: true },
+                    ],
+                  },
+                  {
+                    label: '⛽ DSL EAP',
+                    value: dslResults ? `₹${dslResults.totalEAP.toFixed(2)}/km` : 'Run calc.',
+                    sub: 'Equiv. annualized cost',
+                    color: 'text-orange-700',
+                    tooltipLines: dslResults ? [
+                      { label: `${dslParams.kmPerDay} km/day × ${dslParams.operationalDays} days`, value: `${fmt(dslResults.annualKm)} km/yr` },
+                      { label: `NPV km (10%, ${dslResults.years} yrs)`, value: `${fmt(Math.round(dslNpvKm))} km` },
+                      { label: 'NPV total costs', value: `₹${fmt(Math.round(dslNpvCost))}` },
+                      { label: 'EAP = NPV costs ÷ NPV km', value: `₹${dslResults.totalEAP.toFixed(2)}/km`, highlight: true },
+                    ] : [{ label: 'Run Calculate to see DSL EAP', value: '' }],
+                  },
+                  {
+                    label: 'Annual km',
+                    value: fmt(results.annualKm),
+                    sub: 'km/year per bus',
+                    color: 'text-slate-800',
+                    tooltipLines: [
+                      { label: 'km per day', value: `${params.kmPerDay} km` },
+                      { label: 'Operational days/yr', value: `${params.operationalDays}` },
+                      { label: 'Annual km = km/day × days', value: `${fmt(results.annualKm)} km`, highlight: true },
+                    ],
+                  },
+                  {
+                    label: 'EV Fuel share',
+                    value: `${fuelPct.toFixed(1)}%`,
+                    sub: 'of EV total EAP',
+                    color: 'text-slate-800',
+                    tooltipLines: [
+                      { label: 'EV Fuel/Energy EAP', value: `₹${fuelEAP.toFixed(2)}/km` },
+                      { label: 'EV Total EAP', value: `₹${results.totalEAP.toFixed(2)}/km` },
+                      { label: 'Fuel share = Fuel EAP ÷ Total EAP', value: `${fuelPct.toFixed(1)}%`, highlight: true },
+                    ],
+                  },
+                ];
+
+                return (
+                  <>
+                    {/* Fixed card tooltip */}
+                    {cardTooltip && (
+                      <div
+                        className="fixed z-[9999] bg-slate-900 text-white text-[11px] rounded-xl pointer-events-none shadow-2xl border border-slate-700"
+                        style={{ left: Math.min(cardTooltip.x + 14, window.innerWidth - 280), top: Math.max(cardTooltip.y - 10, 8), width: 270 }}
+                      >
+                        <div className="px-4 py-2.5 border-b border-slate-700">
+                          <p className="font-bold text-white text-xs">{cardTooltip.title}</p>
+                          <p className="text-slate-400 text-[10px] mt-0.5">How this number is calculated</p>
+                        </div>
+                        <div className="px-4 py-2.5 space-y-1">
+                          {cardTooltip.lines.map((line, i) => (
+                            <div key={i} className={cn(
+                              'flex justify-between gap-3',
+                              line.highlight && 'mt-2 pt-2 border-t border-slate-700'
+                            )}>
+                              <span className={line.highlight ? 'text-slate-300 font-medium' : 'text-slate-400'}>{line.label}</span>
+                              <span className={cn('font-mono flex-shrink-0', line.highlight ? 'text-white font-bold' : 'text-slate-200')}>{line.value}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      {cards.map(c => (
+                        <div
+                          key={c.label}
+                          className="bg-white rounded-xl border border-slate-200 p-4 cursor-default"
+                          onMouseEnter={e => setCardTooltip({ title: c.label, lines: c.tooltipLines, x: e.clientX, y: e.clientY })}
+                          onMouseMove={e => setCardTooltip(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : null)}
+                          onMouseLeave={() => setCardTooltip(null)}
+                        >
+                          <p className="text-slate-400 text-xs mb-1">{c.label}</p>
+                          <p className={cn('font-bold text-lg leading-tight', c.color)}>{c.value}</p>
+                          <p className="text-slate-400 text-[11px] mt-0.5">{c.sub}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
 
               {/* ── Accordion 1: Parity Analysis ── */}
               {parityData && (
