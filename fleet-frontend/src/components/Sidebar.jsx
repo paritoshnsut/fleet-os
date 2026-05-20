@@ -5,7 +5,7 @@ import {
   Bus, Shield, MapPin, LayoutDashboard,
   Activity, FileText, Zap,
   ChevronLeft, ChevronRight, AlertTriangle, ClipboardList,
-  LogOut, Users, Route, Settings2, BarChart2, LineChart,
+  LogOut, Users, Route, Settings2, BarChart2, LineChart, ShieldCheck,
 } from 'lucide-react';
 
 const NAV = [
@@ -43,6 +43,7 @@ const NAV = [
     roles: ['school_staff', 'parent'],
     children: [
       { label: 'School Dashboard', id: 'safe-school', icon: LayoutDashboard, roles: ['school_staff'] },
+      { label: 'Admin Panel',      id: 'safe-admin',  icon: ShieldCheck,     roles: ['school_staff'] },
       { label: 'Parent View',      id: 'safe-parent', icon: Users,           roles: ['parent']       },
     ],
   },

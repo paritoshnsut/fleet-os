@@ -13,6 +13,7 @@ import FleetEV       from './pages/FleetEV';
 import FleetSetup    from './pages/FleetSetup';
 import SafeSchool    from './pages/SafeSchool';
 import SafeParent    from './pages/SafeParent';
+import SafeAdmin     from './pages/SafeAdmin';
 import ONDCJourney   from './pages/ONDCJourney';
 import ONDCArrivals  from './pages/ONDCArrivals';
 import AlertCenter   from './pages/AlertCenter';
@@ -30,6 +31,7 @@ const PAGES = {
   'fleet-setup':    FleetSetup,
   'safe-school':    SafeSchool,
   'safe-parent':    SafeParent,
+  'safe-admin':     SafeAdmin,
   'ondc-journey':   ONDCJourney,
   'ondc-arrivals':  ONDCArrivals,
   'fleet-alerts':   AlertCenter,
