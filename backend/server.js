@@ -4,7 +4,7 @@ const WebSocket = require('ws');
 const cors      = require('cors');
 const drivers   = require('./data/drivers');
 const routes    = require('./data/routes');
-const { initBusStates, tickBusStates, calcDriverScore } = require('./utils/telemetry');
+const { initBusStates, initBusStatesFromFleet, tickBusStates, calcDriverScore } = require('./utils/telemetry');
 
 const app    = express();
 const server = http.createServer(app);
@@ -129,6 +129,17 @@ app.get('/api/ondc/arrivals', (req, res) => {
     fuelType:    bus.fuelType,
   }));
   res.json(arrivals);
+});
+
+// Reload bus states from Fleet Setup (Supabase data pushed by the frontend)
+app.post('/api/reload-buses', (req, res) => {
+  const { buses, drivers: fleetDrivers } = req.body;
+  if (!Array.isArray(buses) || buses.length === 0) {
+    return res.status(400).json({ error: 'buses array required' });
+  }
+  busStates = initBusStatesFromFleet(buses, fleetDrivers || []);
+  console.log(`Fleet reloaded: ${busStates.length} buses`);
+  res.json({ ok: true, count: busStates.length });
 });
 
 // Health check

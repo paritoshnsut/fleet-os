@@ -144,4 +144,38 @@ function calcDriverScore(bus) {
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
-module.exports = { initBusStates, tickBusStates, calcDriverScore };
+// Initialize bus states from Fleet Setup (Supabase) data
+// buses: fleet_buses rows  |  drivers: fleet_drivers rows  (index-paired)
+function initBusStatesFromFleet(buses, drivers) {
+  const routeIds = Object.keys(routes);
+  return buses.map((bus, i) => {
+    const routeId = routeIds[i % routeIds.length];
+    const route   = routes[routeId];
+    const driver  = drivers[i] || null;
+    const isEV    = bus.fuel_type === 'Electric';
+    return {
+      busId:             bus.bus_number,
+      driverId:          driver ? `D${String(i + 1).padStart(3, '0')}` : 'D000',
+      driverName:        driver ? driver.name : 'Unassigned',
+      routeId,
+      routeName:         route.name,
+      routeNo:           route.routeNo,
+      stopIndex:         0,
+      fraction:          Math.random(),
+      direction:         1,
+      speed:             28 + Math.random() * 15,
+      status:            'moving',
+      fuelType:          bus.fuel_type,
+      soc:               isEV ? 60 + Math.random() * 35 : null,
+      engineTemp:        75 + Math.random() * 20,
+      passengerLoad:     Math.floor(20 + Math.random() * 40),
+      kmToday:           Math.floor(40 + Math.random() * 60),
+      harshBrakingCount: 0,
+      harshAccelCount:   0,
+      overspeedCount:    0,
+      lastAlert:         null,
+    };
+  });
+}
+
+module.exports = { initBusStates, initBusStatesFromFleet, tickBusStates, calcDriverScore };

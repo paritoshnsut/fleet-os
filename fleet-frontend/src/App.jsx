@@ -6,6 +6,7 @@ import LoginPage from './pages/LoginPage';
 import OnboardingWizard from './pages/OnboardingWizard';
 import { useTelemetry } from './hooks/useTelemetry';
 import { useAlerts } from './hooks/useAlerts';
+import { syncFleetToBackend } from './lib/syncFleet';
 
 import FleetMap      from './pages/FleetMap';
 import FleetDrivers  from './pages/FleetDrivers';
@@ -59,6 +60,11 @@ function AppShell() {
 
   const defaultPage = profile ? (ROLE_HOME[profile.role] ?? 'fleet-map') : 'fleet-map';
   const [activePage, setActivePage] = useState(defaultPage);
+
+  // Sync Fleet Setup buses/drivers to the backend simulator once on login
+  useEffect(() => {
+    if (user) syncFleetToBackend(user.id);
+  }, [user?.id]);
 
   // When profile first loads (async after session), jump to the correct home page
   const initialPageSet = useRef(false);

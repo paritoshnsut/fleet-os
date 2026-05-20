@@ -7,6 +7,7 @@ import { cn } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { useFleetConfig } from '../contexts/FleetConfigContext';
+import { syncFleetToBackend } from '../lib/syncFleet';
 
 const CONTRACT_LABELS = { gcc: 'GCC', private: 'Private', both: 'GCC + Private' };
 const TABS = [
@@ -55,7 +56,7 @@ function Select({ children, ...props }) {
 }
 
 // ── Bus tab ────────────────────────────────────────────────────────────────────
-function BusesTab({ operatorId, onCountChange }) {
+function BusesTab({ operatorId, onCountChange, onFleetChanged }) {
   const [buses,   setBuses]   = useState([]);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState('');
@@ -75,9 +76,9 @@ function BusesTab({ operatorId, onCountChange }) {
       .eq('is_active', true)
       .order('created_at', { ascending: true });
     if (err) setError(err.message);
-    else { setBuses(data ?? []); onCountChange(data?.length ?? 0); }
+    else { setBuses(data ?? []); onCountChange(data?.length ?? 0); onFleetChanged(); }
     setLoading(false);
-  }, [operatorId, onCountChange]);
+  }, [operatorId, onCountChange, onFleetChanged]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -277,7 +278,7 @@ function BusesTab({ operatorId, onCountChange }) {
 }
 
 // ── Driver tab ─────────────────────────────────────────────────────────────────
-function DriversTab({ operatorId, onCountChange }) {
+function DriversTab({ operatorId, onCountChange, onFleetChanged }) {
   const [drivers, setDrivers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState('');
@@ -297,9 +298,9 @@ function DriversTab({ operatorId, onCountChange }) {
       .eq('is_active', true)
       .order('created_at', { ascending: true });
     if (err) setError(err.message);
-    else { setDrivers(data ?? []); onCountChange(data?.length ?? 0); }
+    else { setDrivers(data ?? []); onCountChange(data?.length ?? 0); onFleetChanged(); }
     setLoading(false);
-  }, [operatorId, onCountChange]);
+  }, [operatorId, onCountChange, onFleetChanged]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -593,6 +594,10 @@ export default function FleetSetup() {
   const [busCount,    setBusCount]    = useState(0);
   const [driverCount, setDriverCount] = useState(0);
 
+  const handleFleetChanged = useCallback(() => {
+    syncFleetToBackend(user.id);
+  }, [user?.id]);
+
   if (!user) return null;
 
   return (
@@ -648,8 +653,8 @@ export default function FleetSetup() {
         </div>
 
         <div className="p-5">
-          {tab === 'buses'   && <BusesTab   operatorId={user.id} onCountChange={setBusCount}    />}
-          {tab === 'drivers' && <DriversTab operatorId={user.id} onCountChange={setDriverCount} />}
+          {tab === 'buses'   && <BusesTab   operatorId={user.id} onCountChange={setBusCount}    onFleetChanged={handleFleetChanged} />}
+          {tab === 'drivers' && <DriversTab operatorId={user.id} onCountChange={setDriverCount} onFleetChanged={handleFleetChanged} />}
           {tab === 'settings' && <SettingsTab />}
           {tab === 'control'  && <ControlCenterTab />}
         </div>
