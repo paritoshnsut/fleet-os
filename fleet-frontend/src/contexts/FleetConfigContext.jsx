@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useCallback } from 'react';
 
 const STORAGE_KEY = 'fleetConfig_v1';
 
@@ -21,13 +21,13 @@ export function FleetConfigProvider({ children }) {
     }
   });
 
-  function updateConfig(patch) {
+  const updateConfig = useCallback((patch) => {
     setConfig(prev => {
       const next = { ...prev, ...patch };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
       return next;
     });
-  }
+  }, []);
 
   return (
     <FleetConfigContext.Provider value={{ config, updateConfig }}>

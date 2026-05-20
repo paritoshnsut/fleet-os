@@ -76,9 +76,9 @@ function BusesTab({ operatorId, onCountChange, onFleetChanged }) {
       .eq('is_active', true)
       .order('created_at', { ascending: true });
     if (err) setError(err.message);
-    else { setBuses(data ?? []); onCountChange(data?.length ?? 0); onFleetChanged(); }
+    else { setBuses(data ?? []); onCountChange(data?.length ?? 0); }
     setLoading(false);
-  }, [operatorId, onCountChange, onFleetChanged]);
+  }, [operatorId, onCountChange]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -101,12 +101,13 @@ function BusesTab({ operatorId, onCountChange, onFleetChanged }) {
     }
 
     setSaving(false);
-    if (!error) { setShowAdd(false); setEditId(null); setForm(blank); await load(); }
+    if (!error) { setShowAdd(false); setEditId(null); setForm(blank); await load(); onFleetChanged(); }
   }
 
   async function handleDelete(id) {
     await supabase.from('fleet_buses').update({ is_active: false }).eq('id', id);
     await load();
+    onFleetChanged();
   }
 
   function startEdit(bus) {
@@ -298,9 +299,9 @@ function DriversTab({ operatorId, onCountChange, onFleetChanged }) {
       .eq('is_active', true)
       .order('created_at', { ascending: true });
     if (err) setError(err.message);
-    else { setDrivers(data ?? []); onCountChange(data?.length ?? 0); onFleetChanged(); }
+    else { setDrivers(data ?? []); onCountChange(data?.length ?? 0); }
     setLoading(false);
-  }, [operatorId, onCountChange, onFleetChanged]);
+  }, [operatorId, onCountChange]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -323,12 +324,13 @@ function DriversTab({ operatorId, onCountChange, onFleetChanged }) {
     }
 
     setSaving(false);
-    if (!error) { setShowAdd(false); setEditId(null); setForm(blank); await load(); }
+    if (!error) { setShowAdd(false); setEditId(null); setForm(blank); await load(); onFleetChanged(); }
   }
 
   async function handleDelete(id) {
     await supabase.from('fleet_drivers').update({ is_active: false }).eq('id', id);
     await load();
+    onFleetChanged();
   }
 
   function startEdit(d) {
