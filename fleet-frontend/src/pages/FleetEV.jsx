@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   Zap, Thermometer, AlertTriangle, X,
-  Battery, Sun, Moon, Sunset,
+  Battery, Sun, Moon, Sunset, Plus, Trash2, Play, Settings2,
 } from 'lucide-react';
 import { cn, formatINR } from '../lib/utils';
 
@@ -207,7 +207,9 @@ function TariffModal({ rates, onClose, onApply }) {
   );
 }
 
+/* ── DemandChart — fixed-position tooltip to avoid overflow clipping ── */
 function DemandChart({ tariff = DEFAULT_TARIFF }) {
+  const [tooltip, setTooltip] = useState(null);
   const max     = Math.max(...tariff);
   const now     = new Date().getHours();
   const optimal = tariff.map(t => t < 5.5);
@@ -222,23 +224,16 @@ function DemandChart({ tariff = DEFAULT_TARIFF }) {
           return (
             <div
               key={i}
-              className="flex-1 rounded-t-sm transition-all relative group"
+              className="flex-1 rounded-t-sm transition-all"
               style={{
                 height: `${heightPct}%`,
-                backgroundColor: isNow
-                  ? '#3b82f6'
-                  : isOpt
-                  ? '#22c55e60'
-                  : '#ef444440',
+                backgroundColor: isNow ? '#3b82f6' : isOpt ? '#22c55e60' : '#ef444440',
                 border: isNow ? '1px solid #3b82f6' : 'none',
               }}
-            >
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1
-                bg-slate-800 text-white text-[9px] px-1.5 py-0.5 rounded whitespace-nowrap
-                opacity-0 group-hover:opacity-100 pointer-events-none z-10">
-                {i}:00 · ₹{t}/kWh
-              </div>
-            </div>
+              onMouseEnter={e => setTooltip({ i, t, x: e.clientX, y: e.clientY })}
+              onMouseMove={e => setTooltip(prev => prev?.i === i ? { ...prev, x: e.clientX, y: e.clientY } : { i, t, x: e.clientX, y: e.clientY })}
+              onMouseLeave={() => setTooltip(null)}
+            />
           );
         })}
       </div>
@@ -258,6 +253,15 @@ function DemandChart({ tariff = DEFAULT_TARIFF }) {
           <div className="w-3 h-3 rounded-sm bg-blue-500" /> Now
         </div>
       </div>
+
+      {tooltip && (
+        <div
+          className="fixed z-[9999] bg-slate-800 text-white text-[9px] px-1.5 py-0.5 rounded whitespace-nowrap pointer-events-none"
+          style={{ top: tooltip.y + 14, left: tooltip.x + 6 }}
+        >
+          {tooltip.i}:00 · ₹{tooltip.t}/kWh
+        </div>
+      )}
     </div>
   );
 }
@@ -308,7 +312,6 @@ function EVBusCard({ bus, schedule, onStatusChange }) {
         ))}
       </div>
 
-      {/* Charging status selector */}
       <p className="text-slate-400 text-[10px] font-medium mb-1.5 uppercase tracking-wide">Charging Status</p>
       <div className="grid grid-cols-4 gap-1 mb-3">
         {STATUS_OPTS.map(({ id, label, on }) => {
@@ -369,6 +372,206 @@ function EVBusCard({ bus, schedule, onStatusChange }) {
   );
 }
 
+/* ══ Scheduler (ported from Charging Planner) ════════════════════════════════ */
+const CHARGER_KW = 60;
+const SLOT_MIN   = 30;
+const SLOTS_DAY  = 48;
+
+function _hhmmToSlot(hhmm) {
+  if (!hhmm) return null;
+  const [h, m] = String(hhmm).split(':').map(Number);
+  return Math.floor((h * 60 + (m || 0)) / SLOT_MIN);
+}
+function _slotToHHMM(slot) {
+  const totalMin = (slot % SLOTS_DAY) * SLOT_MIN;
+  return `${String(Math.floor(totalMin / 60)).padStart(2, '0')}:${String(totalMin % 60).padStart(2, '0')}`;
+}
+function _slotTariff(slot, ht) {
+  return ht[Math.floor((slot % SLOTS_DAY) / 2)];
+}
+function _windowCost(startSlot, numSlots, ht) {
+  let c = 0;
+  for (let s = 0; s < numSlots; s++) c += _slotTariff(startSlot + s, ht) * CHARGER_KW * (SLOT_MIN / 60);
+  return c;
+}
+
+function runOptimizer(busList, numChargers, ht) {
+  const TOTAL = SLOTS_DAY * 2;
+  const occ   = Array.from({ length: numChargers }, () => new Array(TOTAL).fill(null));
+
+  const entries = busList.map(b => {
+    let outSlot = _hhmmToSlot(b.outTime) ?? 40;
+    let inSlot  = _hhmmToSlot(b.inTime)  ?? 12;
+    if (inSlot <= outSlot) inSlot += SLOTS_DAY;
+    const kwhNeeded = b.kwh ? Number(b.kwh) : 100;
+    const numSlots  = Math.ceil(kwhNeeded / (CHARGER_KW * (SLOT_MIN / 60)));
+    const soc       = b.soc ?? 60;
+    const urgency   = (100 - soc) * 100 + Math.max(0, 48 - (inSlot - outSlot));
+    return { ...b, outSlot, inSlot, kwhNeeded, numSlots, soc, urgency };
+  }).sort((a, b) => b.urgency - a.urgency);
+
+  const scheduled = [], conflicts = [];
+  for (const bus of entries) {
+    const { outSlot, inSlot, numSlots } = bus;
+    let bestCost = Infinity, bestStart = -1, bestCharger = -1;
+    for (let start = outSlot; start <= inSlot - numSlots; start++) {
+      const cost = _windowCost(start, numSlots, ht);
+      if (cost >= bestCost) continue;
+      for (let c = 0; c < numChargers; c++) {
+        let free = true;
+        for (let s = 0; s < numSlots; s++) {
+          if (occ[c][start + s]) { free = false; break; }
+        }
+        if (free) { bestCost = cost; bestStart = start; bestCharger = c; break; }
+      }
+    }
+    if (bestStart >= 0) {
+      for (let s = 0; s < numSlots; s++) occ[bestCharger][bestStart + s] = bus.busId;
+      const naiveCost = _windowCost(outSlot, numSlots, ht);
+      scheduled.push({
+        busId:       bus.busId,
+        charger:     `C-${String(bestCharger + 1).padStart(2, '0')}`,
+        arrives:     bus.outTime,
+        departs:     bus.inTime,
+        chargeStart: _slotToHHMM(bestStart),
+        chargeEnd:   _slotToHHMM(bestStart + numSlots),
+        delayed:     bestStart > outSlot,
+        delayMins:   (bestStart - outSlot) * SLOT_MIN,
+        kWh:         bus.kwhNeeded,
+        chargeHours: +(numSlots * SLOT_MIN / 60).toFixed(1),
+        cost:        Math.round(bestCost),
+        naiveCost:   Math.round(naiveCost),
+        savings:     Math.round(naiveCost - bestCost),
+        isUrgent:    bus.soc < 25,
+      });
+    } else {
+      conflicts.push({
+        busId:  bus.busId,
+        reason: (inSlot - outSlot) < numSlots
+          ? `Window too short — needs ${+(numSlots * SLOT_MIN / 60).toFixed(1)} h`
+          : 'All chargers occupied during window',
+      });
+    }
+  }
+
+  const totalCost      = scheduled.reduce((s, r) => s + r.cost, 0);
+  const totalNaiveCost = scheduled.reduce((s, r) => s + r.naiveCost, 0);
+  return {
+    scheduled, conflicts, totalCost, totalNaiveCost,
+    totalSavings: totalNaiveCost - totalCost,
+    savingsPct:   totalNaiveCost > 0
+      ? Math.round((totalNaiveCost - totalCost) / totalNaiveCost * 100) : 0,
+  };
+}
+
+function findMinChargers(busList, ht) {
+  if (!busList.length) return 1;
+  let lo = 1, hi = busList.length, result = busList.length;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (runOptimizer(busList, mid, ht).conflicts.length === 0) { result = mid; hi = mid - 1; }
+    else lo = mid + 1;
+  }
+  return result;
+}
+
+/* ── Charging Schedule Timeline (CSS-based) ─────────────────────────────── */
+function ScheduleTimeline({ scheduled, tariff }) {
+  const groups = {};
+  for (const b of scheduled) {
+    if (!groups[b.charger]) groups[b.charger] = [];
+    groups[b.charger].push(b);
+  }
+  const chargers = Object.keys(groups).sort();
+
+  // 18:00 → 10:00 next day (16 hrs)
+  const T_START = 18 * 60;
+  const T_RANGE = 16 * 60;
+
+  function toMin(hhmm) {
+    if (!hhmm) return 0;
+    const [h, m] = String(hhmm).split(':').map(Number);
+    let min = h * 60 + (m || 0);
+    if (min < 12 * 60) min += 24 * 60;
+    return min;
+  }
+  function toPct(hhmm) {
+    return Math.max(0, Math.min(100, ((toMin(hhmm) - T_START) / T_RANGE) * 100));
+  }
+
+  // Tariff background (hours 18–09)
+  const tariffSlice = [...tariff.slice(18), ...tariff.slice(0, 10)];
+  const tMin = Math.min(...tariff), tMax = Math.max(...tariff), tRange = tMax - tMin || 1;
+  const hours = [18, 20, 22, 0, 2, 4, 6, 8, 10];
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+      <p className="text-slate-700 font-semibold text-sm mb-3">Charger Bay Timeline</p>
+
+      {/* Tariff heatmap strip */}
+      <div className="relative h-5 rounded-lg overflow-hidden mb-1 flex">
+        {tariffSlice.map((rate, i) => {
+          const norm = (rate - tMin) / tRange;
+          return (
+            <div key={i} className="flex-1 h-full"
+              style={{ backgroundColor: `hsl(${Math.round((1 - norm) * 120)},60%,50%)`, opacity: 0.35 }} />
+          );
+        })}
+        <span className="absolute inset-0 flex items-center justify-center text-[9px] text-slate-600 font-medium pointer-events-none">
+          Electricity tariff (green = cheap · red = peak)
+        </span>
+      </div>
+
+      {/* Hour labels */}
+      <div className="flex mb-2">
+        {hours.map(h => (
+          <div key={h} style={{ width: `${100 / (hours.length - 1)}%` }}
+            className="text-center text-[9px] text-slate-400 first:text-left last:text-right">
+            {String(h).padStart(2, '0')}:00
+          </div>
+        ))}
+      </div>
+
+      {/* Charger rows */}
+      <div className="flex flex-col gap-1.5">
+        {chargers.map(charger => (
+          <div key={charger} className="flex items-center gap-2">
+            <span className="text-[10px] text-slate-500 font-semibold w-10 flex-shrink-0">{charger}</span>
+            <div className="flex-1 relative h-7 bg-slate-100 rounded-lg overflow-hidden">
+              {groups[charger].map(bus => {
+                const left  = toPct(bus.chargeStart);
+                const right = toPct(bus.chargeEnd);
+                const width = right - left;
+                const color = bus.isUrgent ? '#f97316' : bus.delayed ? '#10b981' : '#6366f1';
+                return (
+                  <div key={bus.busId}
+                    className="absolute top-1 bottom-1 rounded flex items-center justify-center"
+                    style={{ left: `${left}%`, width: `${Math.max(width, 1)}%`, backgroundColor: color }}
+                    title={`${bus.busId}: ${bus.chargeStart}–${bus.chargeEnd} · ${formatINR(bus.cost)}`}
+                  >
+                    {width > 8 && (
+                      <span className="text-white text-[9px] font-bold truncate px-1">
+                        {bus.busId}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-4 mt-3 text-[10px] text-slate-500">
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-500 inline-block" /> Off-peak (delayed)</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-indigo-500 inline-block" /> Immediate</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-orange-500 inline-block" /> Urgent (low SOC)</span>
+      </div>
+    </div>
+  );
+}
+
+/* ══ Default state ═══════════════════════════════════════════════════════════ */
 const DEFAULT_SCHEDULES = {
   'MH12-AB-1234': { status: 'charging', kw: 60, eta: '2h 15m',   scheduledAt: null,    estCost: 420 },
   'MH12-CD-5678': { status: 'queued',   kw: 60, eta: '3h 00m',   scheduledAt: '23:00', estCost: 380 },
@@ -377,10 +580,28 @@ const DEFAULT_SCHEDULES = {
   'MH12-IJ-7890': { status: 'queued',   kw: 60, eta: '1h 50m',   scheduledAt: '00:00', estCost: 290 },
 };
 
+let _uid = 0;
+const makeRowId = () => `r${++_uid}-${Date.now()}`;
+
+/* ══ Main Component ══════════════════════════════════════════════════════════ */
 export default function FleetEV({ buses }) {
   const [tariffOpen,  setTariffOpen]  = useState(false);
   const [tariffRates, setTariffRates] = useState(DEFAULT_TARIFF);
   const [schedules,   setSchedules]   = useState(DEFAULT_SCHEDULES);
+
+  // Smart Schedule Optimizer state
+  const [schedBuses, setSchedBuses] = useState(() =>
+    buses.filter(b => b.fuelType === 'Electric').map(b => ({
+      id:       b.busId,
+      busId:    b.busId,
+      outTime:  '20:00',
+      inTime:   '06:00',
+      kwh:      String(Math.round((100 - (b.soc || 60)) * 2)),
+      soc:      b.soc ?? 60,
+    }))
+  );
+  const [schedResult,    setSchedResult]    = useState(null);
+  const [depotChargers,  setDepotChargers]  = useState(4);
 
   const evBuses = buses.filter(b => b.fuelType === 'Electric');
 
@@ -422,10 +643,31 @@ export default function FleetEV({ buses }) {
   const isOffPeak    = now >= 22 || now <= 6;
   const currentTariff = isOffPeak ? '₹4.0/kWh' : now >= 9 && now <= 11 ? '₹9.5/kWh' : '₹7.0/kWh';
 
+  // Optimizer helpers
+  function updateSchedBus(id, field, value) {
+    setSchedBuses(prev => prev.map(b => b.id === id ? { ...b, [field]: value } : b));
+  }
+  function addSchedBus() {
+    setSchedBuses(prev => [...prev, { id: makeRowId(), busId: '', outTime: '20:00', inTime: '06:00', kwh: '100', soc: 60 }]);
+  }
+  function deleteSchedBus(id) {
+    setSchedBuses(prev => prev.filter(b => b.id !== id));
+  }
+  function runSmartSchedule() {
+    const busList = schedBuses
+      .filter(b => b.busId.trim() && b.outTime && b.inTime)
+      .map(b => ({ busId: b.busId.trim(), outTime: b.outTime, inTime: b.inTime, kwh: b.kwh ? Number(b.kwh) : 100, soc: b.soc, numTrips: 1, routes: [] }));
+    if (!busList.length) return;
+    const minC   = findMinChargers(busList, tariffRates);
+    const result = runOptimizer(busList, Math.max(depotChargers, minC), tariffRates);
+    setSchedResult({ ...result, minChargers: minC, runAt: new Date() });
+  }
+
   return (
     <>
     <div className="flex flex-col gap-5">
 
+      {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {[
           { label: 'EV Fleet',           value: `${evBuses.length} buses`, sub: 'electric in depot',  color: 'text-blue-600'   },
@@ -443,8 +685,7 @@ export default function FleetEV({ buses }) {
       </div>
 
       {lowSOC > 0 && (
-        <div className="flex items-center gap-3 bg-red-50 border border-red-200
-          rounded-xl px-5 py-3">
+        <div className="flex items-center gap-3 bg-red-50 border border-red-200 rounded-xl px-5 py-3">
           <Battery size={18} className="text-red-500 flex-shrink-0" />
           <div>
             <p className="text-red-700 font-semibold text-sm">
@@ -457,8 +698,10 @@ export default function FleetEV({ buses }) {
         </div>
       )}
 
+      {/* 3-Column Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
 
+        {/* Bus Cards */}
         <div className="lg:col-span-2 flex flex-col gap-4">
           <h3 className="text-slate-500 text-xs font-medium uppercase tracking-wide">
             EV Fleet Status
@@ -475,29 +718,41 @@ export default function FleetEV({ buses }) {
           </div>
         </div>
 
+        {/* Right Panel */}
         <div className="flex flex-col gap-4">
 
-          <div className="bg-gradient-to-br from-blue-50 to-purple-50
-            border border-blue-200 rounded-xl p-4">
+          {/* Smart Charging Banner */}
+          <div className="bg-gradient-to-br from-blue-50 to-purple-50 border border-blue-200 rounded-xl p-4">
             <p className="text-blue-700 font-semibold text-sm flex items-center gap-2 mb-1">
-              <Zap size={14} /> Smart Charging Active
+              <Zap size={14} /> Smart Charging
+              {schedResult ? ' — Schedule Active' : ' Optimizer'}
             </p>
-            <p className="text-slate-500 text-xs mb-3">
-              3 buses scheduled for off-peak charging (22:00–06:00) to avoid
-              peak demand surcharge.
-            </p>
-            <div className="flex items-center justify-between bg-green-50
-              border border-green-200 rounded-lg px-3 py-2">
-              <span className="text-green-700 text-xs font-medium">Est. savings today</span>
-              <span className="text-green-700 font-bold text-sm">
-                {formatINR(peakSaving + 840)}
-              </span>
-            </div>
-            <p className="text-slate-400 text-xs mt-2">
-              vs charging all buses during peak hours (₹9.5/kWh)
-            </p>
+            {schedResult ? (
+              <>
+                <p className="text-slate-500 text-xs mb-3">
+                  {schedResult.scheduled.length} buses optimally scheduled · run {schedResult.runAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                </p>
+                <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                  <span className="text-green-700 text-xs font-medium">Est. savings today</span>
+                  <span className="text-green-700 font-bold text-sm">{formatINR(schedResult.totalSavings)}</span>
+                </div>
+                <p className="text-slate-400 text-xs mt-2">vs charging all buses at immediate arrival rate</p>
+              </>
+            ) : (
+              <>
+                <p className="text-slate-500 text-xs mb-3">
+                  Use the optimizer below to find the cheapest charging windows based on your tariff schedule.
+                </p>
+                <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                  <span className="text-blue-700 text-xs font-medium">Est. savings today</span>
+                  <span className="text-blue-700 font-bold text-sm">{formatINR(peakSaving + 840)}</span>
+                </div>
+                <p className="text-slate-400 text-xs mt-2">vs charging all buses during peak hours (₹9.5/kWh)</p>
+              </>
+            )}
           </div>
 
+          {/* Tariff Chart */}
           <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
             <div className="flex items-center justify-between mb-3">
               <p className="text-slate-500 text-xs font-medium uppercase tracking-wide">
@@ -527,9 +782,10 @@ export default function FleetEV({ buses }) {
             </div>
           </div>
 
+          {/* Depot Chargers */}
           <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
             <p className="text-slate-500 text-xs font-medium uppercase tracking-wide mb-3">
-              Depot Chargers — 4 Slots
+              Depot Chargers — {depotChargers} Slots
             </p>
             <div className="grid grid-cols-2 gap-2">
               {chargerSlots.map(slot => (
@@ -541,6 +797,250 @@ export default function FleetEV({ buses }) {
         </div>
       </div>
 
+      {/* ══ Smart Charging Optimizer ═════════════════════════════════════════ */}
+      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+
+        {/* Header */}
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <p className="text-slate-800 font-semibold text-sm flex items-center gap-2">
+              <Zap size={14} className="text-blue-600" />
+              Smart Charging Optimizer
+            </p>
+            <p className="text-slate-400 text-xs mt-0.5">
+              Pre-filled with today's bus data — edit return/depart windows and kWh needed, then run the schedule
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={() => setTariffOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-slate-200 rounded-lg
+                text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-colors">
+              <Settings2 size={12} /> Edit Tariff
+            </button>
+            <button
+              onClick={runSmartSchedule}
+              className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold bg-blue-600
+                hover:bg-blue-700 text-white rounded-lg transition-colors shadow-sm">
+              <Play size={12} /> Run Schedule
+            </button>
+          </div>
+        </div>
+
+        {/* Bus Input Table */}
+        <div className="p-5">
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full text-xs min-w-[620px]">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200">
+                  <th className="text-left px-4 py-2.5 text-slate-500 font-medium">Bus ID</th>
+                  <th className="text-left px-3 py-2.5 text-slate-500 font-medium">
+                    Returns to depot <span className="font-normal text-slate-400">(charging window start)</span>
+                  </th>
+                  <th className="text-left px-3 py-2.5 text-slate-500 font-medium">
+                    Departs depot <span className="font-normal text-slate-400">(charging window end)</span>
+                  </th>
+                  <th className="text-left px-3 py-2.5 text-slate-500 font-medium">
+                    kWh to charge <span className="font-normal text-slate-400">(capacity needed)</span>
+                  </th>
+                  <th className="text-left px-3 py-2.5 text-slate-500 font-medium">SOC</th>
+                  <th className="w-8" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {schedBuses.map(bus => (
+                  <tr key={bus.id} className="group hover:bg-slate-50/60 transition-colors">
+                    <td className="px-4 py-2">
+                      <input
+                        value={bus.busId}
+                        onChange={e => updateSchedBus(bus.id, 'busId', e.target.value)}
+                        placeholder="e.g. MH12-AB-1234"
+                        className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs
+                          focus:outline-none focus:ring-1 focus:ring-blue-300 bg-white text-slate-800"
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <input
+                        type="time"
+                        value={bus.outTime}
+                        onChange={e => updateSchedBus(bus.id, 'outTime', e.target.value)}
+                        className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs
+                          focus:outline-none focus:ring-1 focus:ring-blue-300 bg-white text-slate-800"
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <input
+                        type="time"
+                        value={bus.inTime}
+                        onChange={e => updateSchedBus(bus.id, 'inTime', e.target.value)}
+                        className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs
+                          focus:outline-none focus:ring-1 focus:ring-blue-300 bg-white text-slate-800"
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <input
+                        type="number"
+                        min="1"
+                        value={bus.kwh}
+                        onChange={e => updateSchedBus(bus.id, 'kwh', e.target.value)}
+                        placeholder="e.g. 80"
+                        className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs
+                          focus:outline-none focus:ring-1 focus:ring-blue-300 bg-white text-slate-800"
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={cn(
+                        'px-2 py-0.5 rounded-full text-[10px] font-medium',
+                        bus.soc < 25 ? 'bg-red-50 text-red-600' : bus.soc < 60 ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'
+                      )}>
+                        {bus.soc}%
+                      </span>
+                    </td>
+                    <td className="px-2 py-2">
+                      <button
+                        onClick={() => deleteSchedBus(bus.id)}
+                        className="opacity-0 group-hover:opacity-100 w-6 h-6 flex items-center justify-center
+                          text-slate-300 hover:text-red-500 rounded transition-all">
+                        <Trash2 size={13} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Footer controls */}
+          <div className="flex items-center justify-between mt-3 gap-4">
+            <button
+              onClick={addSchedBus}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-600
+                border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors">
+              <Plus size={12} /> Add Bus
+            </button>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                <span>Charger bays in depot:</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="20"
+                  value={depotChargers}
+                  onChange={e => setDepotChargers(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-14 border border-slate-200 rounded-lg px-2 py-1 text-xs text-center
+                    focus:outline-none focus:ring-1 focus:ring-blue-300"
+                />
+              </div>
+              {schedResult && (
+                <span className="text-xs text-slate-400">
+                  Min needed: <strong className="text-violet-600">{schedResult.minChargers}</strong>
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Results */}
+        {schedResult && (
+          <div className="border-t border-slate-100 px-5 pb-5 flex flex-col gap-4">
+            <p className="text-slate-500 text-[10px] font-medium uppercase tracking-wide pt-4">
+              Schedule Results · run at {schedResult.runAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+            </p>
+
+            {/* Summary cards */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[
+                { label: 'Buses scheduled', value: String(schedResult.scheduled.length), sub: `of ${schedBuses.length} in table`,                        color: 'text-blue-600'   },
+                { label: 'Min chargers',    value: String(schedResult.minChargers),       sub: 'bays required to fit all buses',                           color: 'text-violet-600' },
+                { label: 'Total cost',      value: formatINR(schedResult.totalCost),      sub: 'off-peak optimised',                                       color: 'text-slate-800'  },
+                { label: 'Savings',         value: formatINR(schedResult.totalSavings),   sub: `${schedResult.savingsPct}% vs charging immediately`,       color: 'text-green-600'  },
+              ].map(s => (
+                <div key={s.label} className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                  <p className="text-slate-500 text-xs mb-1">{s.label}</p>
+                  <p className={cn('text-lg font-bold', s.color)}>{s.value}</p>
+                  <p className="text-slate-400 text-xs mt-0.5">{s.sub}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Conflicts */}
+            {schedResult.conflicts.length > 0 && (
+              <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 space-y-1.5">
+                <p className="text-red-700 text-xs font-semibold flex items-center gap-1.5">
+                  <AlertTriangle size={12} /> {schedResult.conflicts.length} bus{schedResult.conflicts.length > 1 ? 'es' : ''} could not be scheduled
+                </p>
+                {schedResult.conflicts.map(c => (
+                  <div key={c.busId} className="flex items-start gap-2 text-xs text-red-600">
+                    <span className="font-medium min-w-[140px]">{c.busId}</span>
+                    <span className="text-red-400">{c.reason}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Timeline */}
+            {schedResult.scheduled.length > 0 && (
+              <ScheduleTimeline scheduled={schedResult.scheduled} tariff={tariffRates} />
+            )}
+
+            {/* Per-bus schedule table */}
+            {schedResult.scheduled.length > 0 && (
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full text-xs min-w-[680px]">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="text-left px-4 py-2.5 text-slate-400 font-medium">Bus ID</th>
+                      <th className="text-left px-3 py-2.5 text-slate-400 font-medium">Charger</th>
+                      <th className="text-left px-3 py-2.5 text-slate-400 font-medium">Available window</th>
+                      <th className="text-left px-3 py-2.5 text-slate-400 font-medium">Optimal charge slot</th>
+                      <th className="text-right px-3 py-2.5 text-slate-400 font-medium">kWh</th>
+                      <th className="text-right px-3 py-2.5 text-slate-400 font-medium">Cost</th>
+                      <th className="text-right px-4 py-2.5 text-slate-400 font-medium">Saved</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {schedResult.scheduled.map(r => (
+                      <tr key={r.busId} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center gap-1.5">
+                            {r.isUrgent && <span className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />}
+                            <span className="font-medium text-slate-800">{r.busId}</span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5 text-blue-600 font-medium">{r.charger}</td>
+                        <td className="px-3 py-2.5 text-slate-500">{r.arrives} → {r.departs}</td>
+                        <td className="px-3 py-2.5">
+                          <span className={cn('font-medium', r.delayed ? 'text-amber-600' : 'text-green-600')}>
+                            {r.chargeStart} – {r.chargeEnd}
+                          </span>
+                          {r.delayed && (
+                            <span className="ml-1.5 text-amber-400 text-[10px]">delayed {r.delayMins}m (off-peak)</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5 text-right text-slate-600">{r.kWh}</td>
+                        <td className="px-3 py-2.5 text-right text-slate-700 font-medium">{formatINR(r.cost)}</td>
+                        <td className="px-4 py-2.5 text-right font-semibold text-green-600">
+                          {r.savings > 0 ? `+${formatINR(r.savings)}` : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-slate-50 border-t-2 border-slate-200">
+                      <td colSpan={5} className="px-4 py-2.5 text-slate-500 text-xs font-medium">
+                        Total · {schedResult.scheduled.length} buses
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-bold text-slate-800">{formatINR(schedResult.totalCost)}</td>
+                      <td className="px-4 py-2.5 text-right font-bold text-green-600">+{formatINR(schedResult.totalSavings)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+      </div>
 
     </div>
 
@@ -548,7 +1048,20 @@ export default function FleetEV({ buses }) {
       <TariffModal
         rates={tariffRates}
         onClose={() => setTariffOpen(false)}
-        onApply={rates => setTariffRates(rates)}
+        onApply={rates => {
+          setTariffRates(rates);
+          // Re-run schedule with new tariff if results exist
+          if (schedResult) {
+            const busList = schedBuses
+              .filter(b => b.busId.trim() && b.outTime && b.inTime)
+              .map(b => ({ busId: b.busId.trim(), outTime: b.outTime, inTime: b.inTime, kwh: b.kwh ? Number(b.kwh) : 100, soc: b.soc, numTrips: 1, routes: [] }));
+            if (busList.length) {
+              const minC   = findMinChargers(busList, rates);
+              const result = runOptimizer(busList, Math.max(depotChargers, minC), rates);
+              setSchedResult({ ...result, minChargers: minC, runAt: new Date() });
+            }
+          }
+        }}
       />
     )}
     </>

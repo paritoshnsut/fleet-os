@@ -55,8 +55,15 @@ function ComplianceBadge({ pct }) {
 
 /* ── Summary Card with tooltip ───────────────────────────── */
 function SummaryCard({ icon: Icon, label, value, sub, color = 'text-slate-900', bg = 'bg-white', tooltip }) {
+  const [tipPos, setTipPos] = useState(null);
+
   return (
-    <div className={cn('relative group border border-slate-200 rounded-xl px-4 py-4 shadow-sm cursor-default', bg)}>
+    <div
+      className={cn('relative border border-slate-200 rounded-xl px-4 py-4 shadow-sm cursor-default', bg)}
+      onMouseEnter={e => tooltip && setTipPos({ x: e.clientX, y: e.clientY })}
+      onMouseMove={e => tooltip && setTipPos({ x: e.clientX, y: e.clientY })}
+      onMouseLeave={() => setTipPos(null)}
+    >
       <div className="flex items-start justify-between mb-2">
         <p className="text-slate-500 text-xs">{label}</p>
         <Icon size={15} className={color} />
@@ -64,12 +71,15 @@ function SummaryCard({ icon: Icon, label, value, sub, color = 'text-slate-900', 
       <p className={cn('text-2xl font-bold', color)}>{value}</p>
       {sub && <p className="text-slate-400 text-xs mt-1">{sub}</p>}
 
-      {tooltip && (
-        <div className="absolute bottom-full left-0 mb-2 w-72 bg-slate-800 text-white text-xs
-          p-3.5 rounded-xl shadow-2xl z-50 opacity-0 group-hover:opacity-100
-          pointer-events-none transition-opacity duration-150 leading-relaxed">
+      {tooltip && tipPos && (
+        <div
+          className="fixed z-[9999] w-72 bg-slate-800 text-white text-xs p-3.5 rounded-xl shadow-2xl pointer-events-none leading-relaxed"
+          style={{
+            top: tipPos.y + 16,
+            left: Math.min(tipPos.x + 8, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 296),
+          }}
+        >
           {tooltip}
-          <div className="absolute top-full left-4 border-4 border-transparent border-t-slate-800" />
         </div>
       )}
     </div>
@@ -356,7 +366,11 @@ export default function FleetGCC({ fetchGCC }) {
 
   function viewOverdueDetails() {
     setFilterPSM('overdue');
-    setTimeout(() => listRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() =>
+        listRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      )
+    );
   }
 
   // Apply payment overrides and config overrides to each row
