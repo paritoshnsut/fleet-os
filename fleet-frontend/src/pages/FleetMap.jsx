@@ -7,6 +7,8 @@ import {
 } from 'lucide-react';
 import { cn, getSpeedColor, formatINR } from '../lib/utils';
 import { useFleetConfig } from '../contexts/FleetConfigContext';
+import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../lib/supabase';
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -45,6 +47,27 @@ function createBusIcon(speed, fuelType, threshold = 65) {
     iconSize:   [28, 28],
     iconAnchor: [14, 14],
     popupAnchor:[0, -16],
+  });
+}
+
+function createGroundedIcon() {
+  const svg = `
+    <div style="position:relative;width:32px;height:32px;">
+      <div style="
+        width:32px;height:32px;border-radius:50%;
+        background:#f1f5f9;border:2.5px solid #94a3b8;
+        display:flex;align-items:center;justify-content:center;
+        font-size:13px;position:relative;z-index:1;
+        box-shadow:0 2px 8px rgba(0,0,0,0.10);
+        opacity:0.7;
+      ">🔒</div>
+    </div>`;
+  return L.divIcon({
+    html: svg,
+    className: '',
+    iconSize:   [32, 32],
+    iconAnchor: [16, 16],
+    popupAnchor:[0, -18],
   });
 }
 
@@ -123,13 +146,15 @@ const DEMO_EVENTS = [
 export default function FleetMap({ buses, alerts }) {
   const { config } = useFleetConfig();
   const { overspeedThreshold, gccRatePerKm } = config;
+  const { user } = useAuth();
 
-  const [routes,     setRoutes]     = useState([]);
-  const [showRoutes, setShowRoutes] = useState(true);
-  const [filterFuel, setFilterFuel] = useState('all');
-  const [toasts,     setToasts]     = useState([]);
+  const [routes,      setRoutes]      = useState([]);
+  const [showRoutes,  setShowRoutes]  = useState(true);
+  const [filterFuel,  setFilterFuel]  = useState('all');
+  const [toasts,      setToasts]      = useState([]);
   const [demoMode,    setDemoMode]    = useState(false);
   const [frozenBuses, setFrozenBuses] = useState([]);
+  const [groundedIds, setGroundedIds] = useState(new Set());
   const seenRef       = useRef(new Set());
   const mountedRef    = useRef(false);
   const demoActiveRef = useRef(false);
@@ -159,6 +184,26 @@ export default function FleetMap({ buses, alerts }) {
       .then(setRoutes)
       .catch(() => {});
   }, []);
+
+  // Fetch grounded buses from Supabase and keep in sync via realtime
+  useEffect(() => {
+    if (!user) return;
+    async function fetchGrounded() {
+      const { data } = await supabase
+        .from('fleet_buses')
+        .select('bus_number')
+        .eq('operator_id', user.id)
+        .eq('is_grounded', true);
+      setGroundedIds(new Set((data || []).map(b => b.bus_number)));
+    }
+    fetchGrounded();
+    const channel = supabase
+      .channel('fleet-map-grounded')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'fleet_buses',
+        filter: `operator_id=eq.${user.id}` }, fetchGrounded)
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [user?.id]);
 
   // New WS alerts → queue toasts (no cleanup so timers fire independently)
   useEffect(() => {
@@ -222,24 +267,35 @@ export default function FleetMap({ buses, alerts }) {
     setTimeout(() => setToasts(prev => prev.filter(t => t._tid !== tid)), 400);
   }
 
-  const filteredBuses = displayBuses.filter(b =>
+  const activeBuses   = displayBuses.filter(b => !groundedIds.has(b.busId));
+  const groundedBuses = displayBuses.filter(b => groundedIds.has(b.busId));
+
+  const filteredActive = activeBuses.filter(b =>
+    filterFuel === 'all' ? true :
+    filterFuel === 'ev'  ? b.fuelType === 'Electric' : b.fuelType === 'CNG'
+  );
+  const filteredGrounded = groundedBuses.filter(b =>
     filterFuel === 'all' ? true :
     filterFuel === 'ev'  ? b.fuelType === 'Electric' : b.fuelType === 'CNG'
   );
 
-  const avgSpeed  = displayBuses.length ? Math.round(displayBuses.reduce((s, b) => s + b.speed, 0) / displayBuses.length) : 0;
-  const overspeed = displayBuses.filter(b => b.speed > overspeedThreshold).length;
-  const evBuses   = displayBuses.filter(b => b.fuelType === 'Electric');
+  const avgSpeed  = activeBuses.length ? Math.round(activeBuses.reduce((s, b) => s + b.speed, 0) / activeBuses.length) : 0;
+  const overspeed = activeBuses.filter(b => b.speed > overspeedThreshold).length;
+  const evBuses   = activeBuses.filter(b => b.fuelType === 'Electric');
   const avgSOC    = evBuses.length
     ? Math.round(evBuses.reduce((s, b) => s + (b.soc || 0), 0) / evBuses.length) : 0;
-  const totalRev  = displayBuses.reduce((s, b) => s + (b.kmToday || 0) * gccRatePerKm, 0);
+  const totalRev  = activeBuses.reduce((s, b) => s + (b.kmToday || 0) * gccRatePerKm, 0);
 
   return (
     <div className="flex flex-col gap-4 h-full">
 
       {/* Summary bar */}
       <div className="flex items-center gap-3 flex-wrap">
-        <StatCard label="Buses Live"    value={displayBuses.length} sub="active on routes" />
+        <StatCard label="Buses Live"    value={activeBuses.length}  sub="active on routes" />
+        {groundedBuses.length > 0 && (
+          <StatCard label="Grounded" value={groundedBuses.length}
+            sub="defect reported" color="text-red-600" />
+        )}
         <StatCard label="Avg Speed"     value={`${avgSpeed} km/h`}  sub="fleet average"
           color={avgSpeed > 55 ? 'text-orange-600' : 'text-slate-900'} />
         <StatCard label="Overspeed"     value={overspeed}           sub={`buses >${overspeedThreshold} km/h`}
@@ -297,7 +353,24 @@ export default function FleetMap({ buses, alerts }) {
               ) : null;
             })}
 
-            {filteredBuses.map(bus => {
+            {filteredGrounded.map(bus => {
+              if (!bus.lat || !bus.lng) return null;
+              return (
+                <Marker key={`g-${bus.busId}`} position={[bus.lat, bus.lng]} icon={createGroundedIcon()}>
+                  <Popup maxWidth={200}>
+                    <div style={{ fontFamily: 'system-ui, sans-serif', padding: '4px' }}>
+                      <p style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a', marginBottom: '4px' }}>{bus.busId}</p>
+                      <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '8px' }}>
+                        <p style={{ color: '#dc2626', fontWeight: 600, fontSize: '12px' }}>🔒 Bus Grounded</p>
+                        <p style={{ color: '#94a3b8', fontSize: '11px', marginTop: '2px' }}>Defect reported — lift grounding in Trip Defect Reports</p>
+                      </div>
+                    </div>
+                  </Popup>
+                </Marker>
+              );
+            })}
+
+            {filteredActive.map(bus => {
               if (!bus.lat || !bus.lng) return null;
               const score = Math.max(0, 100
                 - (bus.harshBrakingCount || 0) * 3
