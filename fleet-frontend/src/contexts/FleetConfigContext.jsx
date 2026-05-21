@@ -3,10 +3,12 @@ import { createContext, useContext, useState, useCallback } from 'react';
 const STORAGE_KEY = 'fleetConfig_v1';
 
 const DEFAULTS = {
-  overspeedThreshold: 65,      // km/h — used in Live Map & Driver Scorecards
-  gccRatePerKm:       80,      // ₹/km — used in Live Map revenue & GCC Compliance
-  gccDriverRatePerKm: 56.5,    // ₹/km — used in Driver earnings card
-  deployedBusCount:   8,       // total buses deployed — shown in Live Map "of N deployed"
+  overspeedThreshold:  65,    // km/h — used in Live Map & Driver Scorecards
+  gccRatePerKm:        80,    // ₹/km — GCC rate paid per km operated
+  gccDriverRatePerKm:  56.5,  // ₹/km — driver earnings rate
+  deployedBusCount:    3,     // total buses deployed
+  contractedKmPerDay:  180,   // km — daily contracted km per bus
+  paymentCycleDays:    30,    // days — PSM payment cycle (overdue threshold)
 };
 
 const FleetConfigContext = createContext(DEFAULTS);

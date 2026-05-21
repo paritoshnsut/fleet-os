@@ -190,8 +190,11 @@ function AlertSection({ title, dotColor, incidents, onStatusChange, defaultOpen 
 export default function AlertCenter({ incidents = [], updateStatus, wsAccum = [] }) {
   const [localStatuses, setLocalStatuses] = useState({});
 
-  // Supabase incidents take priority; app-level WS accumulator is the fallback
-  const raw = incidents.length > 0 ? incidents : wsAccum;
+  // Merge Supabase incidents + any live WS alerts not already represented in DB
+  const dbKeys = new Set(incidents.map(i => `${i.bus_id ?? ''}-${i.message ?? ''}`));
+  const freshWs = wsAccum.filter(w => w._wsOnly && !dbKeys.has(`${w.bus_id ?? ''}-${w.message ?? ''}`));
+  const raw = [...incidents, ...freshWs]
+    .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at));
 
   // Apply local-state overrides for WS-only rows
   const display = raw.map(i =>
