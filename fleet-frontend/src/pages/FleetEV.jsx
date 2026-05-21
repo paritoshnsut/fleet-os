@@ -262,9 +262,17 @@ function DemandChart({ tariff = DEFAULT_TARIFF }) {
   );
 }
 
-function EVBusCard({ bus, schedule }) {
+const STATUS_OPTS = [
+  { id: null,       label: 'Off',      on: 'bg-slate-100 border-slate-300 text-slate-600'  },
+  { id: 'queued',   label: 'Queued',   on: 'bg-amber-100 border-amber-300 text-amber-700'  },
+  { id: 'charging', label: 'Charging', on: 'bg-blue-100 border-blue-300 text-blue-700'     },
+  { id: 'complete', label: 'Done',     on: 'bg-green-100 border-green-300 text-green-700'  },
+];
+
+function EVBusCard({ bus, schedule, onStatusChange }) {
   const ambientTemp = 28 + Math.floor(Math.random() * 10);
   const tooHot      = ambientTemp > 35;
+  const curStatus   = schedule?.status ?? null;
 
   return (
     <div className={cn(
@@ -284,14 +292,14 @@ function EVBusCard({ bus, schedule }) {
       </div>
 
       <div className="mb-4">
-        <SOCBar soc={bus.soc} charging={schedule?.status === 'charging'} />
+        <SOCBar soc={bus.soc} charging={curStatus === 'charging'} />
       </div>
 
-      <div className="grid grid-cols-3 gap-2 mb-4">
+      <div className="grid grid-cols-3 gap-2 mb-3">
         {[
-          { label: 'Km today',     value: `${bus.kmToday} km`,                         color: 'text-slate-800'  },
-          { label: 'Energy used',  value: `${(bus.kmToday * 1.4).toFixed(0)} kWh`,    color: 'text-purple-600' },
-          { label: 'Range left',   value: `${Math.round(bus.soc * 2.8)} km`,           color: bus.soc < 25 ? 'text-red-600' : 'text-slate-800' },
+          { label: 'Km today',    value: `${bus.kmToday} km`,                       color: 'text-slate-800'  },
+          { label: 'Energy used', value: `${(bus.kmToday * 1.4).toFixed(0)} kWh`,  color: 'text-purple-600' },
+          { label: 'Range left',  value: `${Math.round(bus.soc * 2.8)} km`,         color: bus.soc < 25 ? 'text-red-600' : 'text-slate-800' },
         ].map(({ label, value, color }) => (
           <div key={label} className="bg-slate-50 rounded-lg px-3 py-2">
             <p className="text-slate-400 text-xs mb-0.5">{label}</p>
@@ -300,33 +308,53 @@ function EVBusCard({ bus, schedule }) {
         ))}
       </div>
 
+      {/* Charging status selector */}
+      <p className="text-slate-400 text-[10px] font-medium mb-1.5 uppercase tracking-wide">Charging Status</p>
+      <div className="grid grid-cols-4 gap-1 mb-3">
+        {STATUS_OPTS.map(({ id, label, on }) => {
+          const active = curStatus === id;
+          return (
+            <button
+              key={String(id)}
+              onClick={() => onStatusChange(bus.busId, id)}
+              className={cn(
+                'py-1.5 rounded-lg text-xs font-medium border transition-all',
+                active ? on : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+              )}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
       {schedule ? (
         <div className={cn(
           'rounded-lg px-3 py-2.5 border text-xs',
-          schedule.status === 'charging'
+          curStatus === 'charging'
             ? 'bg-blue-50 border-blue-200 text-blue-700'
-            : schedule.status === 'queued'
+            : curStatus === 'queued'
             ? 'bg-amber-50 border-amber-200 text-amber-700'
             : 'bg-green-50 border-green-200 text-green-700'
         )}>
           <div className="flex items-center gap-1.5 font-medium mb-0.5">
             <Zap size={11} />
-            {schedule.status === 'charging' ? 'Currently charging'
-             : schedule.status === 'queued'  ? `Scheduled: ${schedule.scheduledAt}`
+            {curStatus === 'charging' ? 'Currently charging'
+             : curStatus === 'queued'  ? `Scheduled: ${schedule.scheduledAt ?? '23:00'}`
              : 'Charge complete'}
           </div>
           <p className="text-slate-500">
-            {schedule.status === 'charging'
-              ? `${schedule.kw}kW AC · Full charge in ${schedule.eta}`
-              : schedule.status === 'queued'
-              ? `Off-peak slot · Est. cost ${formatINR(schedule.estCost)}`
+            {curStatus === 'charging'
+              ? `${schedule.kw ?? 60}kW AC · Full charge in ${schedule.eta ?? '2h 30m'}`
+              : curStatus === 'queued'
+              ? `Off-peak slot · Est. cost ${formatINR(schedule.estCost ?? 400)}`
               : `Ready for duty · SOC at ${Math.round(bus.soc)}%`
             }
           </p>
         </div>
       ) : (
         <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-xs text-slate-400">
-          Not scheduled — assign to charger
+          Not scheduled — select a status above to assign
         </div>
       )}
 
@@ -341,19 +369,42 @@ function EVBusCard({ bus, schedule }) {
   );
 }
 
+const DEFAULT_SCHEDULES = {
+  'MH12-AB-1234': { status: 'charging', kw: 60, eta: '2h 15m',   scheduledAt: null,    estCost: 420 },
+  'MH12-CD-5678': { status: 'queued',   kw: 60, eta: '3h 00m',   scheduledAt: '23:00', estCost: 380 },
+  'MH12-EF-9012': { status: 'complete', kw: 0,  eta: null,        scheduledAt: null,    estCost: 510 },
+  'MH12-GH-3456': { status: 'queued',   kw: 60, eta: '2h 45m',   scheduledAt: '01:00', estCost: 360 },
+  'MH12-IJ-7890': { status: 'queued',   kw: 60, eta: '1h 50m',   scheduledAt: '00:00', estCost: 290 },
+};
+
 export default function FleetEV({ buses }) {
   const [tariffOpen,  setTariffOpen]  = useState(false);
   const [tariffRates, setTariffRates] = useState(DEFAULT_TARIFF);
+  const [schedules,   setSchedules]   = useState(DEFAULT_SCHEDULES);
 
   const evBuses = buses.filter(b => b.fuelType === 'Electric');
 
-  const schedules = {
-    'MH12-AB-1234': { status: 'charging', kw: 60, eta: '2h 15m',   scheduledAt: null,    estCost: 420 },
-    'MH12-CD-5678': { status: 'queued',   kw: 60, eta: '3h 00m',   scheduledAt: '23:00', estCost: 380 },
-    'MH12-EF-9012': { status: 'complete', kw: 0,  eta: null,        scheduledAt: null,    estCost: 510 },
-    'MH12-GH-3456': { status: 'queued',   kw: 60, eta: '2h 45m',   scheduledAt: '01:00', estCost: 360 },
-    'MH12-IJ-7890': { status: 'queued',   kw: 60, eta: '1h 50m',   scheduledAt: '00:00', estCost: 290 },
-  };
+  function setChargeStatus(busId, status) {
+    setSchedules(prev => {
+      if (status === null) {
+        const next = { ...prev };
+        delete next[busId];
+        return next;
+      }
+      const base = prev[busId] || {};
+      return {
+        ...prev,
+        [busId]: {
+          ...base,
+          status,
+          kw:          status === 'charging' ? 60 : 0,
+          eta:         status === 'charging' ? '2h 30m' : status === 'queued' ? '3h 00m' : null,
+          scheduledAt: status === 'queued' ? (base.scheduledAt ?? '23:00') : null,
+          estCost:     base.estCost ?? 400,
+        },
+      };
+    });
+  }
 
   const chargerSlots = [
     { id: 'C-01', busId: 'MH12-AB-1234', status: 'charging', kw: 60, soc: evBuses[0]?.soc || 45, eta: '2h 15m', cost: 420 },
@@ -418,6 +469,7 @@ export default function FleetEV({ buses }) {
                 key={bus.busId}
                 bus={bus}
                 schedule={schedules[bus.busId]}
+                onStatusChange={setChargeStatus}
               />
             ))}
           </div>
