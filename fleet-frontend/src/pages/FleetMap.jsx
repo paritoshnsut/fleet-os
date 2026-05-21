@@ -128,10 +128,30 @@ export default function FleetMap({ buses, alerts }) {
   const [showRoutes, setShowRoutes] = useState(true);
   const [filterFuel, setFilterFuel] = useState('all');
   const [toasts,     setToasts]     = useState([]);
-  const [demoMode,   setDemoMode]   = useState(false);
-  const seenRef      = useRef(new Set());
-  const mountedRef   = useRef(false);
+  const [demoMode,    setDemoMode]    = useState(false);
+  const [frozenBuses, setFrozenBuses] = useState([]);
+  const seenRef       = useRef(new Set());
+  const mountedRef    = useRef(false);
   const demoActiveRef = useRef(false);
+  const busesRef      = useRef(buses);
+
+  // Always keep a ref to the latest buses so effects can read without stale closures
+  useEffect(() => {
+    busesRef.current = buses;
+    // Capture initial snapshot so the map is static before demo starts
+    if (frozenBuses.length === 0 && buses.length > 0) {
+      setFrozenBuses(buses);
+    }
+  }, [buses]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Freeze position when demo stops
+  useEffect(() => {
+    if (!demoMode && busesRef.current.length > 0) {
+      setFrozenBuses([...busesRef.current]);
+    }
+  }, [demoMode]);
+
+  const displayBuses = demoMode ? buses : frozenBuses;
 
   useEffect(() => {
     fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:4000/api'}/routes`)
@@ -202,24 +222,24 @@ export default function FleetMap({ buses, alerts }) {
     setTimeout(() => setToasts(prev => prev.filter(t => t._tid !== tid)), 400);
   }
 
-  const filteredBuses = buses.filter(b =>
+  const filteredBuses = displayBuses.filter(b =>
     filterFuel === 'all' ? true :
     filterFuel === 'ev'  ? b.fuelType === 'Electric' : b.fuelType === 'CNG'
   );
 
-  const avgSpeed  = buses.length ? Math.round(buses.reduce((s, b) => s + b.speed, 0) / buses.length) : 0;
-  const overspeed = buses.filter(b => b.speed > overspeedThreshold).length;
-  const evBuses   = buses.filter(b => b.fuelType === 'Electric');
+  const avgSpeed  = displayBuses.length ? Math.round(displayBuses.reduce((s, b) => s + b.speed, 0) / displayBuses.length) : 0;
+  const overspeed = displayBuses.filter(b => b.speed > overspeedThreshold).length;
+  const evBuses   = displayBuses.filter(b => b.fuelType === 'Electric');
   const avgSOC    = evBuses.length
     ? Math.round(evBuses.reduce((s, b) => s + (b.soc || 0), 0) / evBuses.length) : 0;
-  const totalRev  = buses.reduce((s, b) => s + (b.kmToday || 0) * gccRatePerKm, 0);
+  const totalRev  = displayBuses.reduce((s, b) => s + (b.kmToday || 0) * gccRatePerKm, 0);
 
   return (
     <div className="flex flex-col gap-4 h-full">
 
       {/* Summary bar */}
       <div className="flex items-center gap-3 flex-wrap">
-        <StatCard label="Buses Live"    value={buses.length}        sub="active on routes" />
+        <StatCard label="Buses Live"    value={displayBuses.length} sub="active on routes" />
         <StatCard label="Avg Speed"     value={`${avgSpeed} km/h`}  sub="fleet average"
           color={avgSpeed > 55 ? 'text-orange-600' : 'text-slate-900'} />
         <StatCard label="Overspeed"     value={overspeed}           sub={`buses >${overspeedThreshold} km/h`}
