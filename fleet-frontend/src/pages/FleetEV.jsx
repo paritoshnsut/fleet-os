@@ -549,9 +549,10 @@ function ScheduleTimeline({ scheduled, tariff }) {
                     style={{ left: `${left}%`, width: `${Math.max(width, 1)}%`, backgroundColor: color }}
                     title={`${bus.busId}: ${bus.chargeStart}–${bus.chargeEnd} · ${formatINR(bus.cost)}`}
                   >
-                    {width > 8 && (
-                      <span className="text-white text-[9px] font-bold truncate px-1">
-                        {bus.busId}
+                    {width > 3 && (
+                      <span className="text-white font-bold truncate px-1 leading-none"
+                        style={{ fontSize: width > 9 ? '9px' : '7px' }}>
+                        {width > 9 ? bus.busId : bus.busId.split('-').slice(-1)[0]}
                       </span>
                     )}
                   </div>
@@ -572,13 +573,7 @@ function ScheduleTimeline({ scheduled, tariff }) {
 }
 
 /* ══ Default state ═══════════════════════════════════════════════════════════ */
-const DEFAULT_SCHEDULES = {
-  'MH12-AB-1234': { status: 'charging', kw: 60, eta: '2h 15m',   scheduledAt: null,    estCost: 420 },
-  'MH12-CD-5678': { status: 'queued',   kw: 60, eta: '3h 00m',   scheduledAt: '23:00', estCost: 380 },
-  'MH12-EF-9012': { status: 'complete', kw: 0,  eta: null,        scheduledAt: null,    estCost: 510 },
-  'MH12-GH-3456': { status: 'queued',   kw: 60, eta: '2h 45m',   scheduledAt: '01:00', estCost: 360 },
-  'MH12-IJ-7890': { status: 'queued',   kw: 60, eta: '1h 50m',   scheduledAt: '00:00', estCost: 290 },
-};
+const DEFAULT_SCHEDULES = {};
 
 let _uid = 0;
 const makeRowId = () => `r${++_uid}-${Date.now()}`;
@@ -977,6 +972,24 @@ export default function FleetEV({ buses }) {
                 ))}
               </div>
             )}
+
+            {/* Simultaneous-charge note */}
+            {schedResult.scheduled.length > 1 && (() => {
+              const starts = new Set(schedResult.scheduled.map(r => r.chargeStart));
+              if (starts.size === 1) {
+                const startTime = schedResult.scheduled[0].chargeStart;
+                return (
+                  <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-xs text-blue-700">
+                    <Zap size={12} className="flex-shrink-0 mt-0.5" />
+                    <span>
+                      All buses charge at <strong>{startTime}</strong> simultaneously — this is optimal because the cheapest tariff window coincides and {Math.max(depotChargers, schedResult.minChargers)} charger bays are available.
+                      To stagger them, reduce charger bay count below {schedResult.scheduled.length}.
+                    </span>
+                  </div>
+                );
+              }
+              return null;
+            })()}
 
             {/* Timeline */}
             {schedResult.scheduled.length > 0 && (
