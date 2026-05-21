@@ -3,7 +3,7 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
-  AlertTriangle, X
+  AlertTriangle, X, Play, Square,
 } from 'lucide-react';
 import { cn, getSpeedColor, formatINR } from '../lib/utils';
 import { useFleetConfig } from '../contexts/FleetConfigContext';
@@ -112,16 +112,26 @@ function stableKey(a) {
 }
 
 /* ══════════════════════════════════════════════════════ */
+const DEMO_EVENTS = [
+  { message: 'Bus MH12-AB-1234 approaching Hinjewadi depot — ETA 4 min',      severity: 'low',    busId: 'MH12-AB-1234', routeNo: 'R1' },
+  { message: 'MH12-CD-5678 overspeed 72 km/h detected on Wakad Road',         severity: 'high',   busId: 'MH12-CD-5678', routeNo: 'R2' },
+  { message: 'Passenger load at 92% — bus MH12-EF-9012 on Route R3',          severity: 'medium', busId: 'MH12-EF-9012', routeNo: 'R3' },
+  { message: 'Route deviation — MH12-AB-1234 is 200 m off designated route',  severity: 'medium', busId: 'MH12-AB-1234', routeNo: 'R1' },
+  { message: 'All buses on schedule — no delays or incidents reported',        severity: 'low',    busId: null,           routeNo: null  },
+];
+
 export default function FleetMap({ buses, alerts }) {
   const { config } = useFleetConfig();
-  const { overspeedThreshold, gccRatePerKm, deployedBusCount } = config;
+  const { overspeedThreshold, gccRatePerKm } = config;
 
   const [routes,     setRoutes]     = useState([]);
   const [showRoutes, setShowRoutes] = useState(true);
   const [filterFuel, setFilterFuel] = useState('all');
   const [toasts,     setToasts]     = useState([]);
+  const [demoMode,   setDemoMode]   = useState(false);
   const seenRef      = useRef(new Set());
-  const mountedRef   = useRef(false);   // true after first effect run
+  const mountedRef   = useRef(false);
+  const demoActiveRef = useRef(false);
 
   useEffect(() => {
     fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:4000/api'}/routes`)
@@ -160,6 +170,33 @@ export default function FleetMap({ buses, alerts }) {
     mountedRef.current = true;
   }, [alerts]);
 
+  function startDemo() {
+    if (demoMode) {
+      demoActiveRef.current = false;
+      setDemoMode(false);
+      return;
+    }
+    demoActiveRef.current = true;
+    setDemoMode(true);
+
+    DEMO_EVENTS.forEach((event, i) => {
+      setTimeout(() => {
+        if (!demoActiveRef.current) return;
+        const tid = `demo-${Date.now()}-${i}`;
+        setToasts(prev => [...prev, { ...event, _tid: tid, detected_at: new Date().toISOString(), _exiting: false }].slice(-5));
+        setTimeout(() => {
+          setToasts(prev => prev.map(t => t._tid === tid ? { ...t, _exiting: true } : t));
+          setTimeout(() => setToasts(prev => prev.filter(t => t._tid !== tid)), 400);
+        }, 9000);
+      }, i * 5000 + 800);
+    });
+
+    setTimeout(() => {
+      demoActiveRef.current = false;
+      setDemoMode(false);
+    }, DEMO_EVENTS.length * 5000 + 2000);
+  }
+
   function dismissToast(tid) {
     setToasts(prev => prev.map(t => t._tid === tid ? { ...t, _exiting: true } : t));
     setTimeout(() => setToasts(prev => prev.filter(t => t._tid !== tid)), 400);
@@ -182,7 +219,7 @@ export default function FleetMap({ buses, alerts }) {
 
       {/* Summary bar */}
       <div className="flex items-center gap-3 flex-wrap">
-        <StatCard label="Buses Live"    value={buses.length}        sub={`of ${deployedBusCount} deployed`} />
+        <StatCard label="Buses Live"    value={buses.length}        sub="active on routes" />
         <StatCard label="Avg Speed"     value={`${avgSpeed} km/h`}  sub="fleet average"
           color={avgSpeed > 55 ? 'text-orange-600' : 'text-slate-900'} />
         <StatCard label="Overspeed"     value={overspeed}           sub={`buses >${overspeedThreshold} km/h`}
@@ -191,6 +228,19 @@ export default function FleetMap({ buses, alerts }) {
           color={avgSOC < 30 ? 'text-red-600' : 'text-green-600'} />
         <StatCard label="Revenue Today" value={formatINR(totalRev)} sub={`GCC ₹${gccRatePerKm}/km`}
           color="text-blue-600" />
+        <div className="ml-auto">
+          <button
+            onClick={startDemo}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium border transition-all shadow-sm',
+              demoMode
+                ? 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100'
+                : 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
+            )}
+          >
+            {demoMode ? <><Square size={13} /> Stop Demo</> : <><Play size={13} /> Start Demo</>}
+          </button>
+        </div>
       </div>
 
       {/* Map row */}
@@ -303,6 +353,16 @@ export default function FleetMap({ buses, alerts }) {
               );
             })}
           </MapContainer>
+
+          {/* Demo badge */}
+          {demoMode && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[999]
+              bg-blue-600 text-white text-xs font-medium px-4 py-1.5 rounded-full shadow-lg
+              flex items-center gap-2 pointer-events-none">
+              <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
+              Demo Mode Active
+            </div>
+          )}
 
           {/* Map controls */}
           <div className="absolute bottom-4 left-4 flex gap-2 z-[999]">

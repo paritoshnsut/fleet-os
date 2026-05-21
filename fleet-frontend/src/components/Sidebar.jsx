@@ -20,7 +20,7 @@ const NAV = [
       { label: 'Driver Scorecards',   id: 'fleet-drivers',  icon: Activity      },
       { label: 'GCC Compliance',      id: 'fleet-gcc',      icon: FileText      },
       { label: 'EV Charging',         id: 'fleet-ev',       icon: Zap           },
-      { label: 'Shift Handover',      id: 'fleet-handover', icon: ClipboardList },
+      // { label: 'Shift Handover',      id: 'fleet-handover', icon: ClipboardList },
       { label: 'Trip Defect Reports', id: 'fleet-defects',  icon: ClipboardList },
       { label: 'Fleet Setup',         id: 'fleet-setup',    icon: Settings2     },
     ],

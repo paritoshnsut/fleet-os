@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import {
-  Zap, Thermometer, AlertTriangle,
+  Zap, Thermometer, AlertTriangle, X,
   Battery, Sun, Moon, Sunset,
 } from 'lucide-react';
 import { cn, formatINR } from '../lib/utils';
@@ -104,14 +105,109 @@ function ChargingSlot({ slot }) {
   );
 }
 
-function DemandChart() {
-  const hours  = Array.from({ length: 24 }, (_, i) => i);
-  const tariff = [
-    4.2, 4.0, 3.8, 3.8, 3.9, 4.2,
-    5.1, 6.8, 8.2, 9.5, 9.5, 8.0,
-    7.0, 6.5, 6.2, 6.8, 7.5, 8.8,
-    9.2, 9.0, 8.0, 6.5, 5.2, 4.5,
-  ];
+const DEFAULT_TARIFF = [
+  4.2, 4.0, 3.8, 3.8, 3.9, 4.2,
+  5.1, 6.8, 8.2, 9.5, 9.5, 8.0,
+  7.0, 6.5, 6.2, 6.8, 7.5, 8.8,
+  9.2, 9.0, 8.0, 6.5, 5.2, 4.5,
+];
+
+const TARIFF_PRESETS = {
+  Default:     [...DEFAULT_TARIFF],
+  'Flat Rate': Array(24).fill(6.0),
+  'TOU Peak':  [3.8,3.8,3.8,3.8,3.8,4.0, 5.5,7.5,9.5,9.5,9.5,8.0, 6.5,6.0,6.0,6.5,7.5,9.0, 9.5,9.0,8.0,6.5,5.0,4.2],
+  Weekend:     [3.5,3.5,3.5,3.5,3.5,3.8, 4.5,5.5,6.5,7.0,7.0,6.5, 5.5,5.0,5.0,5.5,6.0,7.0, 7.5,7.0,6.0,5.0,4.0,3.8],
+};
+
+function TariffModal({ rates, onClose, onApply }) {
+  const [local, setLocal] = useState([...rates]);
+  const minR = Math.min(...local);
+  const maxR = Math.max(...local);
+  const avgR = (local.reduce((a, b) => a + b, 0) / 24).toFixed(2);
+
+  function setRate(i, v) {
+    const n = [...local];
+    n[i] = parseFloat(v) || 0;
+    setLocal(n);
+  }
+
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 sticky top-0 bg-white">
+          <div>
+            <p className="font-semibold text-slate-800 text-sm">Electricity Tariff Schedule</p>
+            <p className="text-slate-400 text-xs mt-0.5">Set hourly rates (₹/kWh) — smart charging uses off-peak slots automatically</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 p-1 rounded-lg hover:bg-slate-100 transition-all">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="px-6 py-4 space-y-4">
+          <div>
+            <p className="text-xs font-medium text-slate-500 mb-2">Quick Presets</p>
+            <div className="flex flex-wrap gap-2">
+              {Object.keys(TARIFF_PRESETS).map(name => (
+                <button key={name} onClick={() => setLocal([...TARIFF_PRESETS[name]])}
+                  className="px-3 py-1.5 rounded-lg border text-xs font-medium
+                    bg-slate-50 border-slate-200 text-slate-600
+                    hover:bg-blue-50 hover:border-blue-200 hover:text-blue-700 transition-all">
+                  {name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-slate-50 rounded-xl p-3">
+            <p className="text-xs font-medium text-slate-500 mb-2">Live Preview</p>
+            <DemandChart tariff={local} />
+          </div>
+
+          <div>
+            <p className="text-xs font-medium text-slate-500 mb-2">Hourly Rates (₹/kWh)</p>
+            <div className="grid grid-cols-6 gap-2">
+              {local.map((r, i) => (
+                <div key={i} className="text-center">
+                  <p className="text-slate-400 text-[9px] mb-1">{String(i).padStart(2, '0')}:00</p>
+                  <input
+                    type="number"
+                    min="0"
+                    max="20"
+                    step="0.1"
+                    value={r}
+                    onChange={e => setRate(i, e.target.value)}
+                    className="w-full text-center text-xs border border-slate-200 rounded-lg py-1.5
+                      focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-6 bg-slate-50 rounded-xl px-4 py-3 text-xs">
+            <span className="text-slate-500">Min: <strong className="text-green-600">₹{minR}/kWh</strong></span>
+            <span className="text-slate-500">Max: <strong className="text-red-600">₹{maxR}/kWh</strong></span>
+            <span className="text-slate-500">Avg: <strong className="text-slate-800">₹{avgR}/kWh</strong></span>
+          </div>
+
+          <div className="flex gap-3 pt-1">
+            <button onClick={onClose}
+              className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-medium hover:bg-slate-50 transition-all">
+              Cancel
+            </button>
+            <button onClick={() => { onApply(local); onClose(); }}
+              className="flex-1 bg-blue-600 text-white rounded-xl py-2.5 text-sm font-medium hover:bg-blue-700 transition-all">
+              Apply & Reschedule
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DemandChart({ tariff = DEFAULT_TARIFF }) {
   const max     = Math.max(...tariff);
   const now     = new Date().getHours();
   const optimal = tariff.map(t => t < 5.5);
@@ -167,7 +263,6 @@ function DemandChart() {
 }
 
 function EVBusCard({ bus, schedule }) {
-  const degradation = Math.max(78, 100 - (Math.random() * 15 + 2)).toFixed(1);
   const ambientTemp = 28 + Math.floor(Math.random() * 10);
   const tooHot      = ambientTemp > 35;
 
@@ -192,9 +287,8 @@ function EVBusCard({ bus, schedule }) {
         <SOCBar soc={bus.soc} charging={schedule?.status === 'charging'} />
       </div>
 
-      <div className="grid grid-cols-2 gap-2 mb-4">
+      <div className="grid grid-cols-3 gap-2 mb-4">
         {[
-          { label: 'Battery SoH',  value: `${degradation}%`,                          color: parseFloat(degradation) > 90 ? 'text-green-600' : 'text-amber-600' },
           { label: 'Km today',     value: `${bus.kmToday} km`,                         color: 'text-slate-800'  },
           { label: 'Energy used',  value: `${(bus.kmToday * 1.4).toFixed(0)} kWh`,    color: 'text-purple-600' },
           { label: 'Range left',   value: `${Math.round(bus.soc * 2.8)} km`,           color: bus.soc < 25 ? 'text-red-600' : 'text-slate-800' },
@@ -248,6 +342,9 @@ function EVBusCard({ bus, schedule }) {
 }
 
 export default function FleetEV({ buses }) {
+  const [tariffOpen,  setTariffOpen]  = useState(false);
+  const [tariffRates, setTariffRates] = useState(DEFAULT_TARIFF);
+
   const evBuses = buses.filter(b => b.fuelType === 'Electric');
 
   const schedules = {
@@ -275,6 +372,7 @@ export default function FleetEV({ buses }) {
   const currentTariff = isOffPeak ? '₹4.0/kWh' : now >= 9 && now <= 11 ? '₹9.5/kWh' : '₹7.0/kWh';
 
   return (
+    <>
     <div className="flex flex-col gap-5">
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -349,10 +447,18 @@ export default function FleetEV({ buses }) {
           </div>
 
           <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
-            <p className="text-slate-500 text-xs font-medium uppercase tracking-wide mb-3">
-              24h Electricity Tariff
-            </p>
-            <DemandChart />
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-slate-500 text-xs font-medium uppercase tracking-wide">
+                24h Electricity Tariff
+              </p>
+              <button
+                onClick={() => setTariffOpen(true)}
+                className="text-xs text-blue-600 hover:text-blue-700 font-medium px-2 py-1
+                  rounded-lg hover:bg-blue-50 transition-all border border-transparent hover:border-blue-200">
+                Edit Schedule
+              </button>
+            </div>
+            <DemandChart tariff={tariffRates} />
             <div className="mt-3 space-y-1.5">
               {[
                 { icon: Moon,   label: 'Off-peak (22:00–06:00)',      value: '₹3.8–4.2/kWh', color: 'text-green-600'  },
@@ -385,5 +491,14 @@ export default function FleetEV({ buses }) {
 
 
     </div>
+
+    {tariffOpen && (
+      <TariffModal
+        rates={tariffRates}
+        onClose={() => setTariffOpen(false)}
+        onApply={rates => setTariffRates(rates)}
+      />
+    )}
+    </>
   );
 }

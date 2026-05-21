@@ -5,19 +5,13 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
 const SEED_BUSES = [
   { bus_number: 'MH12-AB-1234', license_plate: 'MH12AB1234', seats: 36, fuel_type: 'Electric', battery_type: '4 Batt' },
   { bus_number: 'MH12-CD-5678', license_plate: 'MH12CD5678', seats: 36, fuel_type: 'Electric', battery_type: '3 Batt' },
-  { bus_number: 'MH12-EF-9012', license_plate: 'MH12EF9012', seats: 36, fuel_type: 'Electric', battery_type: '4 Batt' },
-  { bus_number: 'MH12-GH-3456', license_plate: 'MH12GH3456', seats: 36, fuel_type: 'Electric', battery_type: '3 Batt' },
-  { bus_number: 'MH12-IJ-2345', license_plate: 'MH12IJ2345', seats: 22, fuel_type: 'CNG',      battery_type: null      },
-  { bus_number: 'MH12-KL-6789', license_plate: 'MH12KL6789', seats: 22, fuel_type: 'CNG',      battery_type: null      },
+  { bus_number: 'MH12-EF-9012', license_plate: 'MH12EF9012', seats: 36, fuel_type: 'CNG',      battery_type: null      },
 ];
 
 const SEED_DRIVERS = [
   { name: 'Ramesh Kumar',   phone: '+91 98765 11001', license_number: 'MH0120240001', experience_yrs: 8  },
   { name: 'Vijay Shinde',   phone: '+91 98765 11002', license_number: 'MH0120240002', experience_yrs: 5  },
   { name: 'Suresh Patil',   phone: '+91 98765 11003', license_number: 'MH0120240003', experience_yrs: 12 },
-  { name: 'Ajay Deshmukh',  phone: '+91 98765 11004', license_number: 'MH0120240004', experience_yrs: 3  },
-  { name: 'Nitin Jadhav',   phone: '+91 98765 11005', license_number: 'MH0120240005', experience_yrs: 7  },
-  { name: 'Deepak Rane',    phone: '+91 98765 11006', license_number: 'MH0120240006', experience_yrs: 10 },
 ];
 
 // Insert seed buses + drivers if this operator has none yet.
