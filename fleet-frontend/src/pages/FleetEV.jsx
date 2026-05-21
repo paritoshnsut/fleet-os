@@ -535,29 +535,37 @@ function ScheduleTimeline({ scheduled, tariff }) {
       {/* Charger rows */}
       <div className="flex flex-col gap-1.5">
         {chargers.map(charger => (
-          <div key={charger} className="flex items-center gap-2">
-            <span className="text-[10px] text-slate-500 font-semibold w-10 flex-shrink-0">{charger}</span>
-            <div className="flex-1 relative h-7 bg-slate-100 rounded-lg overflow-hidden">
+          <div key={charger} className="flex items-start gap-2">
+            <span className="text-[10px] text-slate-500 font-semibold w-10 flex-shrink-0 mt-5">{charger}</span>
+            <div className="flex-1 relative" style={{ height: '46px' }}>
+              {/* Bus name labels — sit above the track, always fully visible */}
               {groups[charger].map(bus => {
                 const left  = toPct(bus.chargeStart);
-                const right = toPct(bus.chargeEnd);
-                const width = right - left;
                 const color = bus.isUrgent ? '#f97316' : bus.delayed ? '#10b981' : '#6366f1';
                 return (
-                  <div key={bus.busId}
-                    className="absolute top-1 bottom-1 rounded flex items-center justify-center"
-                    style={{ left: `${left}%`, width: `${Math.max(width, 1)}%`, backgroundColor: color }}
-                    title={`${bus.busId}: ${bus.chargeStart}–${bus.chargeEnd} · ${formatINR(bus.cost)}`}
-                  >
-                    {width > 3 && (
-                      <span className="text-white font-bold truncate px-1 leading-none"
-                        style={{ fontSize: width > 9 ? '9px' : '7px' }}>
-                        {width > 9 ? bus.busId : bus.busId.split('-').slice(-1)[0]}
-                      </span>
-                    )}
-                  </div>
+                  <span key={`lbl-${bus.busId}`}
+                    className="absolute top-0 text-[9px] font-semibold whitespace-nowrap"
+                    style={{ left: `${left}%`, color, lineHeight: '16px' }}>
+                    {bus.busId}
+                  </span>
                 );
               })}
+              {/* Timeline track */}
+              <div className="absolute bottom-0 left-0 right-0 h-7 bg-slate-100 rounded-lg overflow-hidden">
+                {groups[charger].map(bus => {
+                  const left  = toPct(bus.chargeStart);
+                  const right = toPct(bus.chargeEnd);
+                  const width = right - left;
+                  const color = bus.isUrgent ? '#f97316' : bus.delayed ? '#10b981' : '#6366f1';
+                  return (
+                    <div key={bus.busId}
+                      className="absolute top-1 bottom-1 rounded"
+                      style={{ left: `${left}%`, width: `${Math.max(width, 1)}%`, backgroundColor: color }}
+                      title={`${bus.busId}: ${bus.chargeStart}–${bus.chargeEnd} · ${formatINR(bus.cost)}`}
+                    />
+                  );
+                })}
+              </div>
             </div>
           </div>
         ))}
