@@ -211,8 +211,8 @@ export default function FleetMap({ buses, alerts }) {
     alerts.forEach(alert => {
       const key = stableKey(alert);
 
-      if (!mountedRef.current) {
-        // First run after mount: mark pre-existing alerts as seen, no toasts
+      if (!mountedRef.current || !demoActiveRef.current) {
+        // Before mount or outside demo: mark as seen silently — no toasts
         seenRef.current.add(key);
         return;
       }
