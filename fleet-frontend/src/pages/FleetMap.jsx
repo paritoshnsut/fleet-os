@@ -281,8 +281,9 @@ export default function FleetMap({ buses, alerts, demoActive = false, setDemoAct
     filterFuel === 'ev'  ? b.fuelType === 'Electric' : b.fuelType === 'CNG'
   );
 
-  const avgSpeed  = activeBuses.length ? Math.round(activeBuses.reduce((s, b) => s + b.speed, 0) / activeBuses.length) : 0;
-  const overspeed = activeBuses.filter(b => b.speed > overspeedThreshold).length;
+  // Speed is only meaningful while demo is running — frozen snapshots carry stale values
+  const avgSpeed  = demoActive && activeBuses.length ? Math.round(activeBuses.reduce((s, b) => s + b.speed, 0) / activeBuses.length) : 0;
+  const overspeed = demoActive ? activeBuses.filter(b => b.speed > overspeedThreshold).length : 0;
   const evBuses   = activeBuses.filter(b => b.fuelType === 'Electric');
   const avgSOC    = evBuses.length
     ? Math.round(evBuses.reduce((s, b) => s + (b.soc || 0), 0) / evBuses.length) : 0;
