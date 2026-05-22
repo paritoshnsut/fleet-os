@@ -143,7 +143,7 @@ const DEMO_EVENTS = [
   { message: 'All buses on schedule — no delays or incidents reported',        severity: 'low',    busId: null,           routeNo: null  },
 ];
 
-export default function FleetMap({ buses, alerts }) {
+export default function FleetMap({ buses, alerts, demoActive = false, setDemoActive }) {
   const { config } = useFleetConfig();
   const { overspeedThreshold, gccRatePerKm } = config;
   const { user } = useAuth();
@@ -152,13 +152,15 @@ export default function FleetMap({ buses, alerts }) {
   const [showRoutes,  setShowRoutes]  = useState(true);
   const [filterFuel,  setFilterFuel]  = useState('all');
   const [toasts,      setToasts]      = useState([]);
-  const [demoMode,    setDemoMode]    = useState(false);
   const [frozenBuses, setFrozenBuses] = useState([]);
   const [groundedIds, setGroundedIds] = useState(new Set());
   const seenRef       = useRef(new Set());
   const mountedRef    = useRef(false);
   const demoActiveRef = useRef(false);
   const busesRef      = useRef(buses);
+
+  // Keep ref in sync so setTimeout closures always read the latest value
+  useEffect(() => { demoActiveRef.current = demoActive; }, [demoActive]);
 
   // Always keep a ref to the latest buses so effects can read without stale closures
   useEffect(() => {
@@ -171,12 +173,12 @@ export default function FleetMap({ buses, alerts }) {
 
   // Freeze position when demo stops
   useEffect(() => {
-    if (!demoMode && busesRef.current.length > 0) {
+    if (!demoActive && busesRef.current.length > 0) {
       setFrozenBuses([...busesRef.current]);
     }
-  }, [demoMode]);
+  }, [demoActive]);
 
-  const displayBuses = demoMode ? buses : frozenBuses;
+  const displayBuses = demoActive ? buses : frozenBuses;
 
   useEffect(() => {
     fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:4000/api'}/routes`)
@@ -236,13 +238,13 @@ export default function FleetMap({ buses, alerts }) {
   }, [alerts]);
 
   function startDemo() {
-    if (demoMode) {
+    if (demoActive) {
       demoActiveRef.current = false;
-      setDemoMode(false);
+      setDemoActive(false);
       return;
     }
     demoActiveRef.current = true;
-    setDemoMode(true);
+    setDemoActive(true);
 
     DEMO_EVENTS.forEach((event, i) => {
       setTimeout(() => {
@@ -258,7 +260,7 @@ export default function FleetMap({ buses, alerts }) {
 
     setTimeout(() => {
       demoActiveRef.current = false;
-      setDemoMode(false);
+      setDemoActive(false);
     }, DEMO_EVENTS.length * 5000 + 2000);
   }
 
@@ -309,12 +311,12 @@ export default function FleetMap({ buses, alerts }) {
             onClick={startDemo}
             className={cn(
               'flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium border transition-all shadow-sm',
-              demoMode
+              demoActive
                 ? 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100'
                 : 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
             )}
           >
-            {demoMode ? <><Square size={13} /> Stop Demo</> : <><Play size={13} /> Start Demo</>}
+            {demoActive ? <><Square size={13} /> Stop Demo</> : <><Play size={13} /> Start Demo</>}
           </button>
         </div>
       </div>
@@ -448,7 +450,7 @@ export default function FleetMap({ buses, alerts }) {
           </MapContainer>
 
           {/* Demo badge */}
-          {demoMode && (
+          {demoActive && (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[999]
               bg-blue-600 text-white text-xs font-medium px-4 py-1.5 rounded-full shadow-lg
               flex items-center gap-2 pointer-events-none">

@@ -82,7 +82,10 @@ function AppShell() {
     }
   }, [profile, user]);
 
-  // Stable WS alert accumulator — lives here so it persists across page navigation
+  // Single demo-active flag — lifted here so both wsAccum and FleetMap gate on the same source
+  const [demoActive, setDemoActive] = useState(false);
+
+  // Stable WS alert accumulator — only grows while demo is running
   const [wsAccum,   setWsAccum]   = useState([]);
   const wsSeenRef = useRef(new Set());
   useEffect(() => {
@@ -90,7 +93,8 @@ function AppShell() {
     alerts.forEach(a => {
       const key = `${a.busId ?? 'x'}-${(a.type ?? a.message ?? '').slice(0, 30).replace(/\s+/g, '-').toLowerCase()}`;
       if (wsSeenRef.current.has(key)) return;
-      wsSeenRef.current.add(key);
+      wsSeenRef.current.add(key);      // always mark seen so they don't burst when demo starts
+      if (!demoActive) return;         // only log to Alert Center during demo
       fresh.push({
         id:          key,
         _wsOnly:     true,
@@ -105,7 +109,7 @@ function AppShell() {
       });
     });
     if (fresh.length > 0) setWsAccum(prev => [...fresh, ...prev]);
-  }, [alerts]);
+  }, [alerts, demoActive]);
 
   if (loading || (user && !profile)) {
     return (
@@ -127,7 +131,6 @@ function AppShell() {
       activePage={activePage}
       setActivePage={setActivePage}
       connected={connected}
-      wsAccum={wsAccum}
       isDemoMode={isDemoMode}
     >
       <PageComponent
@@ -140,6 +143,8 @@ function AppShell() {
         fetchGCC={telemetry.fetchGCC}
         fetchStudents={telemetry.fetchStudents}
         fetchArrivals={telemetry.fetchArrivals}
+        demoActive={demoActive}
+        setDemoActive={setDemoActive}
       />
     </Layout>
   );
