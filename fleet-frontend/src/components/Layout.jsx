@@ -3,7 +3,7 @@ import Sidebar from './Sidebar';
 import TopBar  from './TopBar';
 import { AlertTriangle, X } from 'lucide-react';
 
-export default function Layout({ activePage, setActivePage, connected, wsAccum = [], isDemoMode, children }) {
+export default function Layout({ activePage, setActivePage, connected, isDemoMode, children }) {
   const [demoDismissed, setDemoDismissed] = useState(false);
   const showBanner = isDemoMode && !demoDismissed;
 
@@ -11,7 +11,7 @@ export default function Layout({ activePage, setActivePage, connected, wsAccum =
     <div className="flex h-screen bg-slate-100 overflow-hidden">
       <Sidebar activePage={activePage} setActivePage={setActivePage} />
       <div className="flex flex-col flex-1 overflow-hidden">
-        <TopBar connected={connected} wsAccum={wsAccum} activePage={activePage} />
+        <TopBar connected={connected} activePage={activePage} />
 
         {showBanner && (
           <div className="flex-shrink-0 bg-amber-50 border-b border-amber-200 px-5 py-2.5
