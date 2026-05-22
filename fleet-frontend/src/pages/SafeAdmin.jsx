@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Bus, Users, UserCircle, AlertTriangle, CheckCircle,
   Plus, Trash2, Loader2, RefreshCw, ChevronRight,
-  Send, Shield, MessageSquare,
+  Send, Shield, MessageSquare, Pencil, Check, X,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
@@ -20,11 +20,13 @@ const STOPS = ['Swargate','Deccan','Aundh','Wakad','Hinjewadi','Katraj','Market 
 
 // ── Buses tab ─────────────────────────────────────────────────────────────────
 function BusesTab({ userId }) {
-  const [buses,   setBuses]   = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [adding,  setAdding]  = useState(false);
-  const [form,    setForm]    = useState({ bus_number: '', seats: '36', fuel_type: 'Electric' });
-  const [saving,  setSaving]  = useState(false);
+  const [buses,      setBuses]      = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [adding,     setAdding]     = useState(false);
+  const [form,       setForm]       = useState({ bus_number: '', seats: '36', fuel_type: 'Electric' });
+  const [saving,     setSaving]     = useState(false);
+  const [editingId,  setEditingId]  = useState(null);
+  const [editForm,   setEditForm]   = useState({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -47,6 +49,24 @@ function BusesTab({ userId }) {
 
   async function handleRemove(id) {
     await supabase.from('fleet_buses').update({ is_active: false }).eq('id', id);
+    load();
+  }
+
+  function startEdit(bus) {
+    setEditingId(bus.id);
+    setEditForm({ bus_number: bus.bus_number, fuel_type: bus.fuel_type, seats: String(bus.seats) });
+  }
+
+  async function handleSaveEdit(id) {
+    if (!editForm.bus_number.trim()) return;
+    setSaving(true);
+    await supabase.from('fleet_buses').update({
+      bus_number: editForm.bus_number.trim(),
+      fuel_type:  editForm.fuel_type,
+      seats:      Number(editForm.seats),
+    }).eq('id', id);
+    setSaving(false);
+    setEditingId(null);
     load();
   }
 
@@ -96,15 +116,44 @@ function BusesTab({ userId }) {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {buses.map(bus => (
-            <div key={bus.id} className="bg-white border border-slate-200 rounded-xl p-4 flex items-start justify-between shadow-sm">
+          {buses.map(bus => editingId === bus.id ? (
+            <div key={bus.id} className="bg-blue-50 border border-blue-300 rounded-xl p-4 flex flex-col gap-2 shadow-sm">
+              <input value={editForm.bus_number} onChange={e => setEditForm(p => ({ ...p, bus_number: e.target.value }))}
+                className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white" />
+              <div className="flex gap-2">
+                <select value={editForm.fuel_type} onChange={e => setEditForm(p => ({ ...p, fuel_type: e.target.value }))}
+                  className="flex-1 px-2 py-1.5 border border-slate-200 rounded-lg text-xs focus:outline-none bg-white">
+                  <option>Electric</option><option>CNG</option><option>Diesel</option>
+                </select>
+                <select value={editForm.seats} onChange={e => setEditForm(p => ({ ...p, seats: e.target.value }))}
+                  className="flex-1 px-2 py-1.5 border border-slate-200 rounded-lg text-xs focus:outline-none bg-white">
+                  <option value="22">22 seats</option><option value="36">36 seats</option><option value="45">45 seats</option>
+                </select>
+              </div>
+              <div className="flex gap-2 mt-1">
+                <button onClick={() => setEditingId(null)} className="flex items-center gap-1 px-3 py-1.5 border border-slate-200 rounded-lg text-slate-500 text-xs hover:bg-white">
+                  <X size={12} /> Cancel
+                </button>
+                <button onClick={() => handleSaveEdit(bus.id)} disabled={saving || !editForm.bus_number.trim()}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {saving ? <Loader2 size={11} className="animate-spin" /> : <Check size={12} />} Save
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div key={bus.id} className="bg-white border border-slate-200 rounded-xl p-4 flex items-start justify-between shadow-sm group">
               <div>
                 <p className="text-slate-800 font-semibold text-sm">{bus.bus_number}</p>
                 <p className="text-slate-400 text-xs mt-0.5">{bus.fuel_type} · {bus.seats} seats</p>
               </div>
-              <button onClick={() => handleRemove(bus.id)} className="text-slate-300 hover:text-red-500 transition-colors p-1">
-                <Trash2 size={14} />
-              </button>
+              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={() => startEdit(bus)} className="text-slate-300 hover:text-blue-500 transition-colors p-1">
+                  <Pencil size={13} />
+                </button>
+                <button onClick={() => handleRemove(bus.id)} className="text-slate-300 hover:text-red-500 transition-colors p-1">
+                  <Trash2 size={13} />
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -115,11 +164,13 @@ function BusesTab({ userId }) {
 
 // ── Drivers tab ───────────────────────────────────────────────────────────────
 function DriversTab({ userId }) {
-  const [drivers, setDrivers] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [adding,  setAdding]  = useState(false);
-  const [form,    setForm]    = useState({ name: '', phone: '', license_number: '', experience_yrs: '5' });
-  const [saving,  setSaving]  = useState(false);
+  const [drivers,   setDrivers]   = useState([]);
+  const [loading,   setLoading]   = useState(true);
+  const [adding,    setAdding]    = useState(false);
+  const [form,      setForm]      = useState({ name: '', phone: '', license_number: '', experience_yrs: '5' });
+  const [saving,    setSaving]    = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editForm,  setEditForm]  = useState({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -142,6 +193,25 @@ function DriversTab({ userId }) {
 
   async function handleRemove(id) {
     await supabase.from('fleet_drivers').update({ is_active: false }).eq('id', id);
+    load();
+  }
+
+  function startEdit(d) {
+    setEditingId(d.id);
+    setEditForm({ name: d.name, phone: d.phone ?? '', license_number: d.license_number ?? '', experience_yrs: String(d.experience_yrs ?? '') });
+  }
+
+  async function handleSaveEdit(id) {
+    if (!editForm.name.trim()) return;
+    setSaving(true);
+    await supabase.from('fleet_drivers').update({
+      name:            editForm.name.trim(),
+      phone:           editForm.phone.trim(),
+      license_number:  editForm.license_number.trim(),
+      experience_yrs:  Number(editForm.experience_yrs) || 0,
+    }).eq('id', id);
+    setSaving(false);
+    setEditingId(null);
     load();
   }
 
@@ -188,16 +258,43 @@ function DriversTab({ userId }) {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {drivers.map(d => (
-            <div key={d.id} className="bg-white border border-slate-200 rounded-xl p-4 flex items-start justify-between shadow-sm">
+          {drivers.map(d => editingId === d.id ? (
+            <div key={d.id} className="bg-blue-50 border border-blue-300 rounded-xl p-4 flex flex-col gap-2 shadow-sm">
+              <input value={editForm.name} onChange={e => setEditForm(p => ({ ...p, name: e.target.value }))}
+                placeholder="Full name" className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white" />
+              <input value={editForm.phone} onChange={e => setEditForm(p => ({ ...p, phone: e.target.value }))}
+                placeholder="Phone" className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white" />
+              <div className="flex gap-2">
+                <input value={editForm.license_number} onChange={e => setEditForm(p => ({ ...p, license_number: e.target.value }))}
+                  placeholder="License no." className="flex-1 px-3 py-1.5 border border-slate-200 rounded-lg text-xs focus:outline-none bg-white" />
+                <input type="number" value={editForm.experience_yrs} onChange={e => setEditForm(p => ({ ...p, experience_yrs: e.target.value }))}
+                  placeholder="Yrs exp" className="w-20 px-3 py-1.5 border border-slate-200 rounded-lg text-xs focus:outline-none bg-white" />
+              </div>
+              <div className="flex gap-2 mt-1">
+                <button onClick={() => setEditingId(null)} className="flex items-center gap-1 px-3 py-1.5 border border-slate-200 rounded-lg text-slate-500 text-xs hover:bg-white">
+                  <X size={12} /> Cancel
+                </button>
+                <button onClick={() => handleSaveEdit(d.id)} disabled={saving || !editForm.name.trim()}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {saving ? <Loader2 size={11} className="animate-spin" /> : <Check size={12} />} Save
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div key={d.id} className="bg-white border border-slate-200 rounded-xl p-4 flex items-start justify-between shadow-sm group">
               <div>
                 <p className="text-slate-800 font-semibold text-sm">{d.name}</p>
                 <p className="text-slate-400 text-xs mt-0.5">{d.phone}</p>
                 <p className="text-slate-400 text-xs">{d.experience_yrs} yrs exp · {d.license_number}</p>
               </div>
-              <button onClick={() => handleRemove(d.id)} className="text-slate-300 hover:text-red-500 transition-colors p-1">
-                <Trash2 size={14} />
-              </button>
+              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={() => startEdit(d)} className="text-slate-300 hover:text-blue-500 transition-colors p-1">
+                  <Pencil size={13} />
+                </button>
+                <button onClick={() => handleRemove(d.id)} className="text-slate-300 hover:text-red-500 transition-colors p-1">
+                  <Trash2 size={13} />
+                </button>
+              </div>
             </div>
           ))}
         </div>
