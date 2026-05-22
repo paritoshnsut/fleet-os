@@ -56,8 +56,12 @@ const ROLE_HOME = {
 function AppShell() {
   const { user, profile, loading, isOnboarded, isDemoMode } = useAuth();
   const { buses, alerts, connected, ...telemetry } = useTelemetry();
-  const { incidents, updateStatus } = useAlerts(alerts);
   const { updateConfig } = useFleetConfig();
+
+  // Single demo-active flag — lifted here so all alert pipelines gate on the same source
+  const [demoActive, setDemoActive] = useState(false);
+
+  const { incidents, updateStatus } = useAlerts(demoActive ? alerts : []);
 
   const defaultPage = profile ? (ROLE_HOME[profile.role] ?? 'fleet-map') : 'fleet-map';
   const [activePage, setActivePage] = useState(defaultPage);
@@ -81,9 +85,6 @@ function AppShell() {
       setActivePage(ROLE_HOME[profile.role] ?? 'fleet-map');
     }
   }, [profile, user]);
-
-  // Single demo-active flag — lifted here so both wsAccum and FleetMap gate on the same source
-  const [demoActive, setDemoActive] = useState(false);
 
   // Stable WS alert accumulator — only grows while demo is running
   const [wsAccum,   setWsAccum]   = useState([]);
