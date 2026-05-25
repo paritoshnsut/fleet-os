@@ -265,9 +265,12 @@ function parseFleetExcel(file) {
             const tripType = /drop/i.test(ttRaw) && !isBoth ? 'drop' : 'pickup';
 
             if (isBoth && inTime && outTime) {
+              // "Both" bus is dedicated all day: departs depot → morning drop → sits at client → evening pickup → returns depot
               const travel = Math.round((km || 30) / 30 * 60);
-              trips.push({ routeName, tripType: 'pickup', outTime: minToTime(Math.max(0, timeToMin(inTime) - travel)), inTime, km, seats });
-              trips.push({ routeName, tripType: 'drop', outTime, inTime: minToTime(timeToMin(outTime) + travel), km, seats });
+              trips.push({ routeName, tripType: 'both',
+                outTime: minToTime(Math.max(0, timeToMin(inTime) - travel)),
+                inTime:  minToTime(timeToMin(outTime) + travel),
+                km: km * 2, seats });
             } else if (inTime || outTime) {
               trips.push({
                 routeName, tripType,
@@ -294,6 +297,7 @@ function parseFleetExcel(file) {
           routes:  [...new Set(bestTrips.map(t => t.routeName))],
           pickups: bestTrips.filter(t => t.tripType === 'pickup').length,
           drops:   bestTrips.filter(t => t.tripType === 'drop').length,
+          both:    bestTrips.filter(t => t.tripType === 'both').length,
         });
       } catch (err) { reject(err); }
     };
@@ -516,8 +520,10 @@ export default function ClientChat({ token }) {
   const [inputOn,    setInputOn]    = useState(false);
   const [choices,    setChoices]    = useState(null);
   const [choicesDone,setChoicesDone]= useState(false);
-  const [showUpload, setShowUpload] = useState(false);
-  const [uploadDone, setUploadDone] = useState(false);
+  const [showUpload,    setShowUpload]    = useState(false);
+  const [uploadDone,    setUploadDone]    = useState(false);
+  const [showTCOUpload, setShowTCOUpload] = useState(false);
+  const [tcoUploadDone, setTCOUploadDone] = useState(false);
 
   const bottomRef   = useRef();
   const pendingRef  = useRef(null);       // resolves with user text or choice
@@ -603,8 +609,9 @@ export default function ClientChat({ token }) {
       return;
     }
 
+    const bothLine = fleet.both > 0 ? ` · ${fleet.both} both-way (dedicated full-day)` : '';
     await bot(
-      `Perfect! I've read your file. Here's what I found:\n\n• ${fleet.trips.length} trips across ${fleet.routes.length} routes\n• ${fleet.pickups} pickups · ${fleet.drops} drops\n• Total daily distance: ${fmt(fleet.totalKm)} km\n\nWhat would you like me to analyse?`
+      `Perfect! I've read your file. Here's what I found:\n\n• ${fleet.trips.length} trips across ${fleet.routes.length} routes\n• ${fleet.pickups} pickups · ${fleet.drops} drops${bothLine}\n• Total daily distance: ${fmt(fleet.totalKm)} km\n\nWhat would you like me to analyse?`
     );
 
     let keepGoing = true;
@@ -683,12 +690,8 @@ export default function ClientChat({ token }) {
 
   // ── Charging ──────────────────────────────────────────────────────────────
   async function doCharge() {
-    await bot('For the charging schedule — how many chargers do you have at your depot?');
-    const text       = await waitText();
-    const numChargers = parseInt(text) || 2;
-
-    await bot('Scheduling charges across your chargers — avoiding peak tariff windows to cut electricity costs...');
-    await delay(1800);
+    await bot('Calculating the minimum number of chargers your depot needs...');
+    await delay(1000);
 
     const tripResult = resultsRef.current.trip || runGreedySchedule(fleetRef.current.trips, 999);
     const input = tripResult.buses.map(bus => ({
@@ -699,14 +702,26 @@ export default function ClientChat({ token }) {
       soc:        35 + Math.round(Math.random() * 30),
     }));
 
+    let minChargers = input.length;
+    for (let n = 1; n <= 30; n++) {
+      if (runChargingSchedule(input, n).conflicts.length === 0) { minChargers = n; break; }
+    }
+
+    await bot(`Minimum chargers required: **${minChargers}**\n\nWith ${minChargers} charger${minChargers !== 1 ? 's' : ''}, all ${input.length} buses fit within their overnight windows.\n\nHow many chargers does your depot actually have? (Type a number, or press Enter to use ${minChargers})`);
+    const text        = await waitText();
+    const numChargers = parseInt(text) || minChargers;
+
+    await bot(`Scheduling charges across ${numChargers} charger${numChargers !== 1 ? 's' : ''} — avoiding peak tariff windows to cut electricity costs...`);
+    await delay(1800);
+
     const result = runChargingSchedule(input, numChargers);
     resultsRef.current = { ...resultsRef.current, charge: result };
 
     await bot('Charging plan ready!', 'stats', { stats: [
-      { label: 'Buses scheduled',          value: result.scheduled.length,                      hi: true },
-      { label: 'Chargers used',            value: numChargers                                             },
-      { label: 'Total energy cost',        value: `₹${fmt(result.totalCost)}`,                  hi: true },
-      { label: 'Saved vs immediate charge',value: `₹${fmt(result.totalSavings)}`                         },
+      { label: 'Buses scheduled',          value: result.scheduled.length,        hi: true },
+      { label: 'Min chargers needed',      value: minChargers                               },
+      { label: 'Total energy cost',        value: `₹${fmt(result.totalCost)}`,    hi: true },
+      { label: 'Saved vs immediate charge',value: `₹${fmt(result.totalSavings)}`           },
     ]});
 
     if (result.scheduled.length > 0) {
@@ -734,10 +749,34 @@ export default function ClientChat({ token }) {
       const busMatch = text.match(/\d+/);
       resultsRef.current._tcoOverrideBuses = busMatch ? parseInt(busMatch[0]) : null;
     } else {
-      await bot('For the financial comparison — roughly how many km per day does each bus run? And are your current buses diesel or EV?\n\n(e.g. "250 km, diesel" or just "180 km")');
-      const text  = await waitText();
-      const kmMatch = text.match(/\d{2,4}/);
-      kmPerDay = kmMatch ? parseInt(kmMatch[0]) : 250;
+      await bot('For financial analysis — would you like to upload your TCO Excel file (with alternate fuel scenario data), or shall I use standard industry parameters?');
+      const tcoChoice = await waitChoice([
+        { id: 'upload',   label: '📤  Upload TCO Excel' },
+        { id: 'standard', label: '📊  Use Standard Parameters' },
+      ]);
+
+      if (tcoChoice.id === 'upload') {
+        await bot("Upload your alternate fuel / TCO scenarios Excel. I'll extract the km/day and cost parameters automatically.");
+        setShowTCOUpload(true);
+        const tcoFleet = await new Promise(resolve => { pendingRef.current = resolve; });
+        if (tcoFleet.isTCOFile && tcoFleet.tcoKmPerDay > 0) {
+          kmPerDay = tcoFleet.tcoKmPerDay;
+          await bot(`Got it — extracted ${kmPerDay} km/day from your TCO file. How many buses are in the fleet you're evaluating?`);
+          const text = await waitText();
+          const busMatch = text.match(/\d+/);
+          resultsRef.current._tcoOverrideBuses = busMatch ? parseInt(busMatch[0]) : null;
+        } else {
+          await bot("I couldn't extract km/day from that file. How many km per day does each bus run?\n\n(e.g. \"250 km\")");
+          const text = await waitText();
+          const kmMatch = text.match(/\d{2,4}/);
+          kmPerDay = kmMatch ? parseInt(kmMatch[0]) : 250;
+        }
+      } else {
+        await bot('For the financial comparison — roughly how many km per day does each bus run?\n\n(e.g. "250 km, diesel" or just "180 km")');
+        const text  = await waitText();
+        const kmMatch = text.match(/\d{2,4}/);
+        kmPerDay = kmMatch ? parseInt(kmMatch[0]) : 250;
+      }
     }
     const busCount = resultsRef.current._tcoOverrideBuses
       || resultsRef.current.trip?.busCount
@@ -811,6 +850,25 @@ export default function ClientChat({ token }) {
     }
   }
 
+  async function handleTCOFile(file) {
+    setTCOUploadDone(true);
+    setShowTCOUpload(false);
+    addMsg({ id: Date.now(), role: 'user', content: `📎 ${file.name}`, type: 'text' });
+    setTyping(true);
+    try {
+      const fleet = await parseFleetExcel(file);
+      setTyping(false);
+      const fn = pendingRef.current;
+      pendingRef.current = null;
+      fn(fleet);
+    } catch (err) {
+      setTyping(false);
+      addMsg({ id: Date.now(), role: 'bot', content: `I couldn't read that file. ${err.message}`, type: 'text' });
+      setTCOUploadDone(false);
+      setShowTCOUpload(true);
+    }
+  }
+
   function handleChoice(choice) {
     setChoicesDone(true);
     setChoices(null);
@@ -876,7 +934,8 @@ export default function ClientChat({ token }) {
 
         {typing && <TypingIndicator />}
 
-        {showUpload && <FileDropZone onFile={handleFile} consumed={uploadDone} />}
+        {showUpload    && <FileDropZone onFile={handleFile}    consumed={uploadDone}    />}
+        {showTCOUpload && <FileDropZone onFile={handleTCOFile} consumed={tcoUploadDone} />}
 
         {choices && (
           <ChoiceChips choices={choices} onChoose={handleChoice} consumed={choicesDone} />
