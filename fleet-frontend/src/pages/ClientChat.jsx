@@ -166,41 +166,134 @@ function runTCOComparison(kmPerDay, busCount) {
   };
 }
 
-// ── Excel Parser ──────────────────────────────────────────────────────────────
+// ── Excel Parser (handles merged-title rows, TCS Adibatla + TCO formats) ─────
+function minToTime(min) {
+  const h = Math.floor(min / 60) % 24, m = min % 60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+
+function normalizeTime(val) {
+  if (val === null || val === undefined || val === '') return null;
+  const s = String(val).trim();
+  const hhmm = s.match(/^(\d{1,2}):(\d{2})/);
+  if (hhmm) return `${String(parseInt(hhmm[1])).padStart(2,'0')}:${hhmm[2]}`;
+  const num = parseFloat(s);
+  if (!isNaN(num) && num > 0 && num < 1) {
+    const totalMin = Math.round(num * 1440);
+    return `${String(Math.floor(totalMin/60)).padStart(2,'0')}:${String(totalMin%60).padStart(2,'0')}`;
+  }
+  return null;
+}
+
+function buildColMap(headerRow) {
+  const norm = s => String(s ?? '').toLowerCase().replace(/[\s_\-\.\r\n\(\)\/]+/g,'');
+  const find = (...tests) => {
+    for (const test of tests) {
+      const i = headerRow.findIndex(h => norm(h) === test); if (i >= 0) return i;
+    }
+    for (const test of tests) {
+      const i = headerRow.findIndex(h => norm(h).includes(test)); if (i >= 0) return i;
+    }
+    return -1;
+  };
+  return {
+    routeName: find('routename','route'),
+    tripType:  find('triptype','pickupdrop','type'),
+    inTime:    find('intime','arrivaltime'),
+    outTime:   find('outtime','departuretime'),
+    km:        find('kmpertrip','kmptrip','km','dist'),
+    seats:     find('seats','nrofseats','seat','cap'),
+  };
+}
+
+function findHeaderRowIdx(rows) {
+  const kw = ['route','name','time','trip','pickup','drop','km','seat'];
+  let best = 1, idx = -1;
+  for (let i = 0; i < Math.min(rows.length, 10); i++) {
+    const score = rows[i].filter(c => kw.some(k => String(c ?? '').toLowerCase().includes(k))).length;
+    if (score > best) { best = score; idx = i; }
+  }
+  return idx;
+}
+
 function parseFleetExcel(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = e => {
       try {
-        const wb  = XLSX.read(e.target.result, { type: 'binary' });
-        const ws  = wb.Sheets[wb.SheetNames[0]];
-        const raw = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        const wb = XLSX.read(e.target.result, { type: 'binary' });
+        let bestTrips = [];
+        let isTCOFile = false;
+        let tcoKmPerDay = 400;
 
-        const norm = s => String(s).toLowerCase().replace(/[\s_\-]+/g, '');
-        const trips = raw.map(row => {
-          const m = {};
-          for (const [k, v] of Object.entries(row)) {
-            const nk = norm(k);
-            if      (nk.includes('route') || nk.includes('name'))         m.routeName = String(v);
-            else if (nk.includes('type')  || nk.includes('trip'))         m.tripType  = /drop/i.test(String(v)) ? 'drop' : 'pickup';
-            else if (nk.includes('out')   || nk.includes('depart'))       m.outTime   = String(v);
-            else if (nk.includes('in')    || nk.includes('arriv') || nk.includes('return')) m.inTime = String(v);
-            else if (nk === 'km' || nk.includes('dist'))                  m.km        = Number(v) || 0;
-            else if (nk.includes('seat')  || nk.includes('cap'))          m.seats     = Number(v) || 36;
+        for (const sheetName of wb.SheetNames) {
+          const ws      = wb.Sheets[sheetName];
+          const allRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+          if (allRows.length < 3) continue;
+
+          // Detect TCO/financial file (has DSL + EV columns + km/day)
+          const topText = allRows.slice(0, 5).flat().join(' ').toLowerCase();
+          if (topText.includes('dsl') && topText.includes('ev') && topText.includes('km')) {
+            isTCOFile = true;
+            for (const row of allRows) {
+              if (/km.*day/i.test(String(row[0] ?? ''))) {
+                const val = parseFloat(String(row[2] ?? '').replace(/[^\d.]/g,''));
+                if (val > 0) { tcoKmPerDay = val; break; }
+              }
+            }
+            continue;
           }
-          return m;
-        }).filter(t => t.routeName && t.outTime && t.inTime);
 
-        if (!trips.length) {
-          reject(new Error('Could not find trips. Columns needed: Route Name, Trip Type, Out Time, In Time, KM, Seats'));
+          const headerIdx = findHeaderRowIdx(allRows);
+          if (headerIdx === -1) continue;
+
+          const colMap = buildColMap(allRows[headerIdx]);
+          if (colMap.routeName === -1) continue;
+          if (colMap.inTime === -1 && colMap.outTime === -1) continue;
+
+          const trips = [];
+          for (const row of allRows.slice(headerIdx + 1)) {
+            const routeName = String(row[colMap.routeName] ?? '').trim();
+            if (!routeName || routeName.length < 3 || /^(sl|#|no\b)/i.test(routeName)) continue;
+
+            const inTime  = colMap.inTime  >= 0 ? normalizeTime(row[colMap.inTime])  : null;
+            const outTime = colMap.outTime >= 0 ? normalizeTime(row[colMap.outTime]) : null;
+            const km      = colMap.km    >= 0 ? Number(row[colMap.km])    || 0  : 0;
+            const seats   = colMap.seats >= 0 ? Number(row[colMap.seats]) || 36 : 36;
+            const ttRaw   = colMap.tripType >= 0 ? String(row[colMap.tripType] ?? '') : '';
+            const isBoth  = /both/i.test(ttRaw);
+            const tripType = /drop/i.test(ttRaw) && !isBoth ? 'drop' : 'pickup';
+
+            if (isBoth && inTime && outTime) {
+              const travel = Math.round((km || 30) / 30 * 60);
+              trips.push({ routeName, tripType: 'pickup', outTime: minToTime(Math.max(0, timeToMin(inTime) - travel)), inTime, km, seats });
+              trips.push({ routeName, tripType: 'drop', outTime, inTime: minToTime(timeToMin(outTime) + travel), km, seats });
+            } else if (inTime || outTime) {
+              trips.push({
+                routeName, tripType,
+                outTime: outTime || minToTime(Math.max(0, timeToMin(inTime) - 90)),
+                inTime:  inTime  || minToTime(timeToMin(outTime) + 90),
+                km, seats,
+              });
+            }
+          }
+          if (trips.length > bestTrips.length) bestTrips = trips;
+        }
+
+        if (bestTrips.length === 0 && isTCOFile) {
+          resolve({ trips: [], isTCOFile: true, tcoKmPerDay, totalKm: 0, routes: [], pickups: 0, drops: 0 });
+          return;
+        }
+        if (bestTrips.length === 0) {
+          reject(new Error('Could not find trip data. Expected columns: Route Name, In time, Out time, Trip Type, KM'));
           return;
         }
         resolve({
-          trips,
-          totalKm:  trips.reduce((s, t) => s + (t.km || 0), 0),
-          routes:   [...new Set(trips.map(t => t.routeName))],
-          pickups:  trips.filter(t => t.tripType === 'pickup').length,
-          drops:    trips.filter(t => t.tripType === 'drop').length,
+          trips: bestTrips, isTCOFile: false,
+          totalKm: bestTrips.reduce((s, t) => s + (t.km || 0), 0),
+          routes:  [...new Set(bestTrips.map(t => t.routeName))],
+          pickups: bestTrips.filter(t => t.tripType === 'pickup').length,
+          drops:   bestTrips.filter(t => t.tripType === 'drop').length,
         });
       } catch (err) { reject(err); }
     };
@@ -385,7 +478,7 @@ function FileDropZone({ onFile, consumed }) {
 
   function handle(file) {
     if (!file || consumed) return;
-    if (!/\.(xlsx|xls|csv)$/i.test(file.name)) { alert('Please upload an Excel or CSV file.'); return; }
+    if (!/\.(xlsx|xls|xlsm|csv)$/i.test(file.name)) { alert('Please upload an Excel or CSV file.'); return; }
     onFile(file);
   }
 
@@ -404,8 +497,8 @@ function FileDropZone({ onFile, consumed }) {
     >
       <FileSpreadsheet size={28} className="mx-auto mb-2 text-indigo-400" />
       <p className="text-slate-200 text-sm font-medium">Drop your Excel here, or click to browse</p>
-      <p className="text-slate-400 text-xs mt-1">Columns: Route Name · Trip Type · Out Time · In Time · KM · Seats</p>
-      <input ref={ref} type="file" accept=".xlsx,.xls,.csv" className="hidden"
+      <p className="text-slate-400 text-xs mt-1">Supports: TCS Adibatla format · Alternate fuel TCO · any route schedule Excel</p>
+      <input ref={ref} type="file" accept=".xlsx,.xls,.xlsm,.csv" className="hidden"
         onChange={e => handle(e.target.files?.[0])} />
     </div>
   );
@@ -502,6 +595,13 @@ export default function ClientChat({ token }) {
     // Wait for file → then parse
     const fleet = await new Promise(resolve => { pendingRef.current = resolve; });
     fleetRef.current = fleet;
+
+    if (fleet.isTCOFile) {
+      await bot(`Got it — this looks like a financial / TCO analysis file. I can see it has DSL, EV, and alternate fuel scenarios.\n\nI'll take you straight to the financial comparison. Let me ask you a couple of quick questions.`);
+      await doTCO(fleet.tcoKmPerDay);
+      await doDownload(s.client_name);
+      return;
+    }
 
     await bot(
       `Perfect! I've read your file. Here's what I found:\n\n• ${fleet.trips.length} trips across ${fleet.routes.length} routes\n• ${fleet.pickups} pickups · ${fleet.drops} drops\n• Total daily distance: ${fmt(fleet.totalKm)} km\n\nWhat would you like me to analyse?`
@@ -625,12 +725,23 @@ export default function ClientChat({ token }) {
   }
 
   // ── TCO ───────────────────────────────────────────────────────────────────
-  async function doTCO() {
-    await bot('For the financial comparison — roughly how many km per day does each bus run? And are your current buses diesel or EV?\n\n(e.g. "250 km, diesel" or just "180 km")');
-    const text     = await waitText();
-    const kmMatch  = text.match(/\d{2,4}/);
-    const kmPerDay = kmMatch ? parseInt(kmMatch[0]) : 250;
-    const busCount = resultsRef.current.trip?.busCount || fleetRef.current.trips.length;
+  async function doTCO(prefillKm) {
+    let kmPerDay;
+    if (prefillKm) {
+      kmPerDay = prefillKm;
+      await bot(`I can see from your file that buses run ~${kmPerDay} km/day. How many buses are in the fleet you're evaluating?`);
+      const text = await waitText();
+      const busMatch = text.match(/\d+/);
+      resultsRef.current._tcoOverrideBuses = busMatch ? parseInt(busMatch[0]) : null;
+    } else {
+      await bot('For the financial comparison — roughly how many km per day does each bus run? And are your current buses diesel or EV?\n\n(e.g. "250 km, diesel" or just "180 km")');
+      const text  = await waitText();
+      const kmMatch = text.match(/\d{2,4}/);
+      kmPerDay = kmMatch ? parseInt(kmMatch[0]) : 250;
+    }
+    const busCount = resultsRef.current._tcoOverrideBuses
+      || resultsRef.current.trip?.busCount
+      || (fleetRef.current?.trips?.length || 5);
 
     await bot(`Comparing diesel vs EV total cost of ownership over 6 years for ${busCount} buses at ${kmPerDay} km/day...`);
     await delay(2000);
@@ -680,9 +791,18 @@ export default function ClientChat({ token }) {
     try {
       const fleet = await parseFleetExcel(file);
       setTyping(false);
-      const fn = pendingRef.current;
-      pendingRef.current = null;
-      fn(fleet);
+      if (fleet.isTCOFile) {
+        // Alternate fuel / TCO Excel detected — skip to TCO flow directly
+        fleetRef.current = fleet;
+        const fn = pendingRef.current;
+        pendingRef.current = null;
+        // Pass a synthetic "TCO file" fleet so runFlow takes the right branch
+        fn(fleet);
+      } else {
+        const fn = pendingRef.current;
+        pendingRef.current = null;
+        fn(fleet);
+      }
     } catch (err) {
       setTyping(false);
       addMsg({ id: Date.now(), role: 'bot', content: `I couldn't read that file. ${err.message}`, type: 'text' });
@@ -735,7 +855,9 @@ export default function ClientChat({ token }) {
       {/* Header */}
       <header className="flex items-center justify-between px-6 py-4 border-b border-white/10 flex-shrink-0">
         <div className="flex items-center gap-3">
-          <img src="/tata-logo.svg" alt="Tata Motors" className="h-8 w-auto brightness-0 invert opacity-90" />
+          <div className="bg-white rounded-lg px-2 py-1 flex-shrink-0">
+            <img src="/tata-logo.svg" alt="Tata Motors" className="h-7 w-auto" />
+          </div>
           <div>
             <p className="text-white font-bold text-sm">FleetOS Analyst</p>
             <p className="text-indigo-300 text-xs">Tata Motors CV · Intelligent Fleet Planning</p>
