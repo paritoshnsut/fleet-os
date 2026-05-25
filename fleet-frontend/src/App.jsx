@@ -24,6 +24,8 @@ import DefectReports from './pages/DefectReports';
 import TripPlanner      from './pages/TripPlanner';
 import TCOAnalysis      from './pages/TCOAnalysis';
 import ChargingPlanner  from './pages/ChargingPlanner';
+import ClientSessions   from './pages/ClientSessions';
+import ClientChat       from './pages/ClientChat';
 
 const PAGES = {
   'fleet-map':      FleetMap,
@@ -42,6 +44,7 @@ const PAGES = {
   'trip-planner':      TripPlanner,
   'tco-analysis':      TCOAnalysis,
   'charging-planner':  ChargingPlanner,
+  'client-sessions':   ClientSessions,
 };
 
 // First page shown per role after login / after onboarding
@@ -152,6 +155,10 @@ function AppShell() {
 }
 
 export default function App() {
+  // Magic-link route: ?token=xxx renders the client chat without any auth
+  const token = new URLSearchParams(window.location.search).get('token');
+  if (token) return <ClientChat token={token} />;
+
   return (
     <AuthProvider>
       <FleetConfigProvider>

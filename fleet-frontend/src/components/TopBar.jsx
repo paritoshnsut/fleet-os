@@ -16,7 +16,8 @@ export default function TopBar({ connected, activePage }) {
     'fleet-handover':'Fleet Intelligence — Shift Handover Log',
     'fleet-defects': 'Fleet Intelligence — Trip Defect Reports',
     'fleet-setup':   'Fleet Intelligence — Fleet Setup',
-    'trip-planner':  'Fleet Intelligence — Trip Planner',
+    'trip-planner':     'Fleet Intelligence — Trip Planner',
+    'client-sessions':  'Client Portal — Analysis Sessions',
   };
 
   return (

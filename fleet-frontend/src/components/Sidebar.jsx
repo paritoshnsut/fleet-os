@@ -5,7 +5,7 @@ import {
   Bus, Shield, MapPin, LayoutDashboard,
   Activity, FileText, Zap,
   ChevronLeft, ChevronRight, AlertTriangle, ClipboardList,
-  LogOut, Users, Route, Settings2, BarChart2, LineChart, ShieldCheck,
+  LogOut, Users, Route, Settings2, BarChart2, LineChart, ShieldCheck, Link2,
 } from 'lucide-react';
 
 const NAV = [
@@ -37,6 +37,15 @@ const NAV = [
     ],
   },
   {
+    label: 'Client Portal',
+    icon: Link2,
+    id: 'portal',
+    roles: ['admin'],
+    children: [
+      { label: 'Client Sessions', id: 'client-sessions', icon: Users },
+    ],
+  },
+  {
     label: 'SafeRide',
     icon: Shield,
     id: 'saferide',
@@ -62,7 +71,7 @@ export default function Sidebar({ activePage, setActivePage }) {
   const role = profile?.role ?? null;
 
   const [collapsed,    setCollapsed]    = useState(false);
-  const [openSections, setOpenSections] = useState({ fleet: true, analysis: true, saferide: true });
+  const [openSections, setOpenSections] = useState({ fleet: true, analysis: true, saferide: true, portal: true });
 
   function toggleSection(id) {
     setOpenSections(prev => ({ ...prev, [id]: !prev[id] }));
