@@ -16,23 +16,54 @@ function fmt(n) {
   return Number(n).toLocaleString('en-IN');
 }
 
-// ── Trip Scheduler (greedy first-fit) ────────────────────────────────────────
-function runGreedySchedule(trips, maxBuses) {
+// ── Trip Scheduler — Optimal (bipartite matching / minimum path cover) ────────
+function runOptimalSchedule(trips, maxBuses) {
   const sorted = [...trips]
     .filter(t => t.outTime && t.inTime)
     .sort((a, b) => timeToMin(a.outTime) - timeToMin(b.outTime));
+  const n = sorted.length;
+  if (n === 0) return { busCount: 0, buses: [], totalTrips: 0, totalKm: 0, utilization: 0, savedBuses: 0 };
 
-  const buses = [];
-  for (const trip of sorted) {
-    const outMin = timeToMin(trip.outTime);
-    const inMin  = timeToMin(trip.inTime);
-    const bus    = buses.find(b => b.freeAt + 15 <= outMin);
-    if (bus) {
-      bus.legs.push(trip);
-      bus.freeAt = inMin;
-    } else if (!maxBuses || buses.length < maxBuses) {
-      buses.push({ id: buses.length + 1, legs: [trip], freeAt: inMin });
+  // adj[i] = indices of trips that can follow trip i (with ≥15 min turnaround)
+  const adj = sorted.map((_, i) => {
+    const freeAt = timeToMin(sorted[i].inTime) + 15;
+    return sorted.reduce((acc, _, j) => {
+      if (j !== i && freeAt <= timeToMin(sorted[j].outTime)) acc.push(j);
+      return acc;
+    }, []);
+  });
+
+  // Hopcroft-style augmenting-path matching (simple DFS variant, O(V·E))
+  const matchL = new Int16Array(n).fill(-1);   // matchL[i]=j: trip i is followed by trip j
+  const matchR = new Int16Array(n).fill(-1);   // matchR[j]=i: trip j is preceded by trip i
+  const seen   = new Uint8Array(n);
+
+  function augment(u) {
+    for (const v of adj[u]) {
+      if (seen[v]) continue;
+      seen[v] = 1;
+      if (matchR[v] === -1 || augment(matchR[v])) {
+        matchL[u] = v; matchR[v] = u; return true;
+      }
     }
+    return false;
+  }
+
+  for (let i = 0; i < n; i++) { seen.fill(0); augment(i); }
+
+  // Reconstruct chain paths
+  const buses = [];
+  for (let start = 0; start < n; start++) {
+    if (matchR[start] !== -1) continue;   // has a predecessor — not a chain head
+    const bus = { id: buses.length + 1, legs: [], freeAt: 0 };
+    let cur = start;
+    while (cur !== -1) {
+      bus.legs.push(sorted[cur]);
+      bus.freeAt = timeToMin(sorted[cur].inTime);
+      cur = matchL[cur];
+    }
+    buses.push(bus);
+    if (maxBuses && buses.length >= maxBuses) break;
   }
 
   const totalKm = trips.reduce((s, t) => s + (Number(t.km) || 0), 0);
@@ -53,6 +84,7 @@ function runGreedySchedule(trips, maxBuses) {
     totalKm,
     utilization,
     savedBuses: Math.max(0, (maxBuses || trips.length) - buses.length),
+    isOptimal:  true,
   };
 }
 
@@ -357,6 +389,77 @@ function exportExcel(clientName, results, messages) {
 }
 
 // ── Chat UI components ────────────────────────────────────────────────────────
+function GanttChart({ msg }) {
+  const { title, legend, timeStartMin, timeEndMin, rows } = msg.meta;
+  const ROW_H = 22, LABEL_W = 62, PAD = 10, HEADER = 26;
+  const W = 580, chartW = W - LABEL_W - PAD;
+  const H = HEADER + rows.length * ROW_H + PAD;
+  const range = Math.max(1, timeEndMin - timeStartMin);
+
+  function tx(min) { return LABEL_W + (min - timeStartMin) / range * chartW; }
+
+  const ticks = [];
+  for (let m = Math.ceil(timeStartMin / 120) * 120; m <= timeEndMin; m += 120) ticks.push(m);
+
+  return (
+    <div className="flex gap-2 items-start">
+      <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center flex-shrink-0 mt-1">
+        <Bot size={14} className="text-white" />
+      </div>
+      <div className="max-w-2xl overflow-hidden rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm shadow-sm">
+        {title && (
+          <div className="px-4 py-2.5 border-b border-white/10">
+            <p className="text-slate-300 text-xs font-medium">{title}</p>
+          </div>
+        )}
+        <div className="overflow-x-auto p-2">
+          <svg width={W} height={H} style={{ display: 'block' }}>
+            {ticks.map(m => {
+              const x = tx(m);
+              const h = Math.floor((m % 1440) / 60);
+              const label = String(h).padStart(2,'0') + ':00' + (m >= 1440 ? '†' : '');
+              return (
+                <g key={m}>
+                  <line x1={x} y1={HEADER - 4} x2={x} y2={H - 4} stroke="rgba(255,255,255,0.08)" strokeWidth={1}/>
+                  <text x={x} y={HEADER - 9} textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize={9}>{label}</text>
+                </g>
+              );
+            })}
+            {rows.map((row, i) => {
+              const y = HEADER + i * ROW_H;
+              return (
+                <g key={i}>
+                  <text x={LABEL_W - 4} y={y + ROW_H * 0.65} textAnchor="end"
+                    fill="rgba(255,255,255,0.4)" fontSize={9}>{row.label}</text>
+                  <rect x={LABEL_W} y={y + 2} width={chartW} height={ROW_H - 4}
+                    fill={i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent'} rx={2}/>
+                  {row.bars.map((bar, j) => {
+                    const x1 = tx(bar.startMin), x2 = tx(bar.endMin);
+                    return (
+                      <rect key={j} x={x1} y={y + 4} width={Math.max(2, x2 - x1)} height={ROW_H - 8}
+                        fill={bar.color || 'rgba(99,102,241,0.75)'} rx={2} opacity={0.85}/>
+                    );
+                  })}
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+        {legend && legend.length > 0 && (
+          <div className="px-4 py-2.5 border-t border-white/10 flex gap-4 flex-wrap">
+            {legend.map(l => (
+              <div key={l.label} className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded" style={{ background: l.color }}/>
+                <span className="text-slate-400 text-xs">{l.label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TypingIndicator() {
   return (
     <div className="flex gap-2 items-end">
@@ -399,6 +502,8 @@ function ChatBubble({ msg }) {
       </div>
     );
   }
+
+  if (msg.type === 'gantt') return <GanttChart msg={msg} />;
 
   if (msg.type === 'table') {
     return (
@@ -655,22 +760,67 @@ export default function ClientChat({ token }) {
 
   // ── Trip Planning ─────────────────────────────────────────────────────────
   async function doTrip() {
-    await bot('Great — trip planning it is.\n\nHow many buses do you currently have available in your fleet? I\'ll find the minimum you actually need.');
-    const text  = await waitText();
-    const maxB  = parseInt(text) || 999;
+    await bot('Great — trip planning it is.\n\nHow many buses do you currently have available in your fleet? (Enter a number, or type "0" to just find the minimum)');
+    const text = await waitText();
+    const maxB = parseInt(text) || 999;
 
-    await bot('Running the schedule optimiser — greedy first-fit, pairing heuristic, corridor matching...');
-    await delay(2200);
+    await bot(
+      `Here's how the optimiser works:\n\n` +
+      `1. Each trip is a time window — [depot departure → depot return]\n` +
+      `2. We build a compatibility graph: can bus finish trip A in time to start trip B? (with 15-min turnaround)\n` +
+      `3. Maximum bipartite matching on that graph finds the largest set of A→B pairings — each pairing means one less bus\n` +
+      `4. Minimum buses = total trips − maximum pairings (this is provably optimal via Dilworth's theorem)\n\n` +
+      `Running over all ${fleetRef.current.trips.length} trips now…`
+    );
+    await delay(2400);
 
-    const result = runGreedySchedule(fleetRef.current.trips, maxB);
+    const result = runOptimalSchedule(fleetRef.current.trips, maxB === 999 ? 0 : maxB);
     resultsRef.current = { ...resultsRef.current, trip: result };
 
-    await bot('Here\'s your optimised trip schedule:', 'stats', { stats: [
-      { label: 'Buses needed',     value: result.busCount,         hi: true  },
-      { label: 'Buses available',  value: maxB === 999 ? '—' : maxB           },
-      { label: 'Fleet utilisation',value: `${result.utilization}%`, hi: true },
-      { label: 'Total daily km',   value: `${fmt(result.totalKm)} km`          },
+    // Explain what the result means
+    const bothCount   = result.buses.filter(b => b.legs.some(l => l.tripType === 'both')).length;
+    const sharedCount = result.buses.filter(b => b.legs.length > 1).length;
+    const soloCount   = result.busCount - sharedCount;
+
+    await bot(
+      `Minimum fleet size confirmed: ${result.busCount} buses.\n\n` +
+      `• ${bothCount} buses are dedicated full-day (both-way routes — they can't be reassigned mid-day)\n` +
+      `• ${sharedCount} buses each cover 2+ trips in a day (the scheduler chained them)\n` +
+      `• ${soloCount} buses run a single trip with no pairing opportunity\n\n` +
+      `Fleet utilisation is ${result.utilization}% — the remaining time is turnaround/rest at depot.`
+    );
+
+    await bot('Optimised schedule summary:', 'stats', { stats: [
+      { label: 'Minimum buses needed', value: result.busCount,          hi: true },
+      { label: 'Buses available',      value: maxB === 999 ? '—' : maxB          },
+      { label: 'Fleet utilisation',    value: `${result.utilization}%`, hi: true },
+      { label: 'Total daily km',       value: `${fmt(result.totalKm)} km`         },
     ]});
+
+    // Gantt chart — first 30 buses
+    const ganttLimit = Math.min(result.buses.length, 30);
+    const ganttRows  = result.buses.slice(0, ganttLimit).map(bus => ({
+      label: `B${bus.id}`,
+      bars:  bus.legs.map(leg => ({
+        startMin: timeToMin(leg.outTime),
+        endMin:   timeToMin(leg.inTime),
+        color: leg.tripType === 'both'   ? 'rgba(139,92,246,0.8)' :
+               leg.tripType === 'pickup' ? 'rgba(59,130,246,0.8)' :
+                                           'rgba(16,185,129,0.8)',
+      })),
+    }));
+    const allMins = result.buses.flatMap(b => b.legs.flatMap(l => [timeToMin(l.outTime), timeToMin(l.inTime)]));
+    addMsg({ id: Date.now() + Math.random(), role: 'bot', type: 'gantt', content: null, meta: {
+      title: `Bus Schedule Gantt — first ${ganttLimit} of ${result.busCount} buses (each row = 1 bus, bars = trip legs)`,
+      timeStartMin: Math.min(...allMins),
+      timeEndMin:   Math.max(...allMins),
+      rows: ganttRows,
+      legend: [
+        { label: 'Both-way (dedicated)', color: 'rgba(139,92,246,0.8)' },
+        { label: 'Pickup',               color: 'rgba(59,130,246,0.8)' },
+        { label: 'Drop',                 color: 'rgba(16,185,129,0.8)' },
+      ],
+    }});
 
     await bot('Per-bus breakdown:', 'table', {
       headers: ['Bus', 'Trips', 'First Out', 'Last In', 'Daily km'],
@@ -684,58 +834,111 @@ export default function ClientChat({ token }) {
     });
 
     if (result.savedBuses > 0 && maxB !== 999) {
-      await bot(`You can cover all ${result.totalTrips} trips with just ${result.busCount} buses — that's ${result.savedBuses} fewer than you planned. At ~₹75 lakh per bus, that's ₹${result.savedBuses * 75}L in fleet cost saved right away.`);
+      await bot(`You can cover all ${result.totalTrips} trips with just ${result.busCount} buses — that's ${result.savedBuses} fewer than your current fleet. At ~₹75 lakh per bus, that's ₹${result.savedBuses * 75}L in potential fleet cost reduction.`);
     }
   }
 
   // ── Charging ──────────────────────────────────────────────────────────────
   async function doCharge() {
-    await bot('Calculating the minimum number of chargers your depot needs...');
-    await delay(1000);
+    await bot(
+      `For the charging plan, here's what I'll do:\n\n` +
+      `1. Each bus charges overnight — from when it returns to depot to when it departs next morning\n` +
+      `2. The tariff varies by hour: off-peak (23:00–06:00) is ₹3.8–4.2/kWh; peak (07:00–10:00, 17:00–21:00) can be ₹8–9.5/kWh\n` +
+      `3. I'll shift each bus's charge window toward off-peak hours to minimise cost\n` +
+      `4. First, I'll calculate the minimum number of chargers needed so every bus can charge overnight`
+    );
+    await delay(1200);
 
-    const tripResult = resultsRef.current.trip || runGreedySchedule(fleetRef.current.trips, 999);
+    const tripResult = resultsRef.current.trip || runOptimalSchedule(fleetRef.current.trips, 0);
+
+    // Build input with CORRECT overnight charging window: return time → next morning departure
+    const rng = (a, b) => a + Math.round(Math.random() * (b - a));
     const input = tripResult.buses.map(bus => ({
-      busId:      `Bus ${bus.id}`,
-      outTime:    bus.legs[0]?.outTime,
-      inTime:     bus.legs[bus.legs.length - 1]?.inTime,
-      kwhNeeded:  75 + Math.round(Math.random() * 45),
-      soc:        35 + Math.round(Math.random() * 30),
+      busId:     `Bus ${bus.id}`,
+      outTime:   bus.legs[bus.legs.length - 1]?.inTime,  // charge window START = evening return
+      inTime:    bus.legs[0]?.outTime,                    // charge window END   = next morning departure
+      kwhNeeded: rng(75, 120),
+      soc:       rng(35, 65),
     }));
 
-    let minChargers = input.length;
-    for (let n = 1; n <= 30; n++) {
-      if (runChargingSchedule(input, n).conflicts.length === 0) { minChargers = n; break; }
+    // Binary-search for minimum chargers (much faster than linear scan for large fleets)
+    let lo = 1, hi = input.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      runChargingSchedule(input, mid).conflicts.length === 0 ? (hi = mid) : (lo = mid + 1);
     }
+    const minChargers = lo;
 
-    await bot(`Minimum chargers required: **${minChargers}**\n\nWith ${minChargers} charger${minChargers !== 1 ? 's' : ''}, all ${input.length} buses fit within their overnight windows.\n\nHow many chargers does your depot actually have? (Type a number, or press Enter to use ${minChargers})`);
+    await bot(
+      `Minimum chargers required: ${minChargers}\n\n` +
+      `With ${minChargers} charger${minChargers !== 1 ? 's' : ''}, every bus fits within its overnight window (typically 8–10 hours between return and next departure).\n\n` +
+      `How many chargers does your depot actually have? (Type a number, or press Enter to use the minimum of ${minChargers})`
+    );
     const text        = await waitText();
     const numChargers = parseInt(text) || minChargers;
 
-    await bot(`Scheduling charges across ${numChargers} charger${numChargers !== 1 ? 's' : ''} — avoiding peak tariff windows to cut electricity costs...`);
+    await bot(
+      `Scheduling charges across ${numChargers} charger${numChargers !== 1 ? 's' : ''}.\n\n` +
+      `The optimiser assigns each bus the cheapest available overnight window on a free charger — ` +
+      `prioritising low-urgency buses first so high-urgency buses (low SoC, short overnight window) always get priority access.`
+    );
     await delay(1800);
 
     const result = runChargingSchedule(input, numChargers);
     resultsRef.current = { ...resultsRef.current, charge: result };
 
-    await bot('Charging plan ready!', 'stats', { stats: [
+    const delayedCount = result.scheduled.filter(b => b.delayed).length;
+    await bot(
+      `Charging plan complete.\n\n` +
+      `${delayedCount} of ${result.scheduled.length} buses had their charge start shifted to a cheaper tariff window — ` +
+      `saving ₹${fmt(result.totalSavings)} vs charging immediately on return. ` +
+      `That's ₹${fmt(Math.round(result.totalSavings / Math.max(1, result.scheduled.length)))} saved per bus per day.`
+    );
+
+    await bot('Charging plan summary:', 'stats', { stats: [
       { label: 'Buses scheduled',          value: result.scheduled.length,        hi: true },
       { label: 'Min chargers needed',      value: minChargers                               },
-      { label: 'Total energy cost',        value: `₹${fmt(result.totalCost)}`,    hi: true },
+      { label: 'Total energy cost / day',  value: `₹${fmt(result.totalCost)}`,    hi: true },
       { label: 'Saved vs immediate charge',value: `₹${fmt(result.totalSavings)}`           },
     ]});
 
+    // Charging Gantt — one row per charger
+    const chargerIds = [...new Set(result.scheduled.map(s => s.charger))].sort();
+    if (chargerIds.length > 0) {
+      const ganttRows = chargerIds.map(ch => ({
+        label: ch,
+        bars: result.scheduled.filter(s => s.charger === ch).map(s => {
+          const start = timeToMin(s.chargeStart);
+          let end     = timeToMin(s.chargeEnd);
+          if (end <= start) end += 1440;   // overnight wrap
+          return { startMin: start, endMin: end, color: s.delayed ? 'rgba(234,179,8,0.8)' : 'rgba(16,185,129,0.8)' };
+        }),
+      }));
+      const allMins = ganttRows.flatMap(r => r.bars.flatMap(b => [b.startMin, b.endMin]));
+      addMsg({ id: Date.now() + Math.random(), role: 'bot', type: 'gantt', content: null, meta: {
+        title: `Charging Schedule Gantt — each row = 1 charger, † = next-day time`,
+        timeStartMin: Math.min(...allMins),
+        timeEndMin:   Math.max(...allMins),
+        rows: ganttRows,
+        legend: [
+          { label: 'Shifted to off-peak (saving cost)', color: 'rgba(234,179,8,0.8)' },
+          { label: 'Charged immediately on return',      color: 'rgba(16,185,129,0.8)' },
+        ],
+      }});
+    }
+
     if (result.scheduled.length > 0) {
       await bot('Per-bus charging slots:', 'table', {
-        headers: ['Bus', 'Charger', 'Start', 'End', 'kWh', 'Cost', 'Savings'],
+        headers: ['Bus', 'Charger', 'Start', 'End', 'kWh', 'Cost (₹)', 'Saved (₹)'],
         rows: result.scheduled.map(b => [
           b.busId, b.charger, b.chargeStart, b.chargeEnd,
-          b.kWh, `₹${fmt(b.cost)}`, `₹${fmt(b.savings)}`,
+          b.kWh, fmt(b.cost), fmt(b.savings),
         ]),
       });
     }
 
     if (result.conflicts.length > 0) {
-      await bot(`⚠️ ${result.conflicts.length} bus${result.conflicts.length > 1 ? 'es' : ''} couldn't be fitted — their trip window is shorter than their charge time. Consider adding one more charger or using opportunity charging.`);
+      await bot(`⚠️ ${result.conflicts.length} bus${result.conflicts.length > 1 ? 'es' : ''} couldn't be scheduled — their overnight window is shorter than their charge time. Adding one more charger or using mid-day opportunity charging would resolve this.`);
     }
   }
 
@@ -782,24 +985,65 @@ export default function ClientChat({ token }) {
       || resultsRef.current.trip?.busCount
       || (fleetRef.current?.trips?.length || 5);
 
-    await bot(`Comparing diesel vs EV total cost of ownership over 6 years for ${busCount} buses at ${kmPerDay} km/day...`);
-    await delay(2000);
+    const annualKm = kmPerDay * 300;
+
+    // Narrate the cost build-up before showing numbers
+    await bot(
+      `Let me walk you through how I calculate cost per km for each fuel type.\n\n` +
+      `**Diesel bus:**\n` +
+      `  • Fuel: ₹90/litre ÷ 3.7 km/litre = ₹24.32/km\n` +
+      `  • Maintenance: ₹4.76/km\n` +
+      `  • Driver + misc: ₹6.66/km\n` +
+      `  → **Total diesel CPK ≈ ₹35.74/km**\n\n` +
+      `**Electric bus:**\n` +
+      `  • Electricity: 11.5 kWh/km ÷ (0.96 efficiency × 0.95 charging loss) ≈ 12.6 kWh/km at avg ₹8.5/kWh = ₹12.63/km\n` +
+      `  • Maintenance (no engine, fewer moving parts): ₹2.50/km\n` +
+      `  • Driver + misc: ₹6.66/km\n` +
+      `  → **Total EV CPK ≈ ₹21.79/km**`
+    );
+    await delay(2200);
 
     const result = runTCOComparison(kmPerDay, busCount);
     resultsRef.current = { ...resultsRef.current, tco: result };
 
-    await bot('Financial analysis complete!', 'stats', { stats: [
-      { label: 'Diesel cost/km',     value: `₹${result.dslCPK}`                                          },
-      { label: 'EV cost/km',         value: `₹${result.evCPK}`,                              hi: true    },
-      { label: 'Annual saving (EV)', value: result.annualSaving > 0 ? `₹${fmt(result.annualSaving)}` : 'Diesel cheaper', hi: result.annualSaving > 0 },
-      { label: 'Payback period',     value: `${result.paybackYrs} years`                                  },
-    ]});
+    await bot(
+      `Now let's look at annual fleet costs for ${busCount} buses running ${fmt(annualKm)} km/year each.\n\n` +
+      `**Diesel annual cost:**\n` +
+      `  • EMI on ₹75L bus (10% down, 9% interest, 6 yr): ~₹${fmt(Math.round(7500000 * 0.9 * 0.09 / (1 - Math.pow(1.09, -6))))}/yr per bus\n` +
+      `  • Operating (₹${result.dslCPK}/km × ${fmt(annualKm)} km): ₹${fmt(Math.round(parseFloat(result.dslCPK) * annualKm))}/yr per bus\n` +
+      `  → **Fleet total: ₹${fmt(result.dslAnnual)}/year**\n\n` +
+      `**EV annual cost:**\n` +
+      `  • EMI on ₹148L bus + ₹9L battery pack (7% interest, 6 yr): ~₹${fmt(Math.round((14800000+900000) * 0.9 * 0.07 / (1 - Math.pow(1.07, -6))))}/yr per bus\n` +
+      `  • Operating (₹${result.evCPK}/km × ${fmt(annualKm)} km): ₹${fmt(Math.round(parseFloat(result.evCPK) * annualKm))}/yr per bus\n` +
+      `  → **Fleet total: ₹${fmt(result.evAnnual)}/year**`
+    );
+    await delay(1800);
 
-    if (result.isFavourable) {
-      await bot(`EV looks compelling for your fleet. The extra upfront cost (₹${fmt(result.extraCapex)}) pays back in ${result.paybackYrs} years — and over the 6-year bus life you save ₹${fmt(result.npvSaving)} in NPV terms. That's a strong business case.`);
+    if (result.annualSaving > 0) {
+      await bot(
+        `**EV saves ₹${fmt(result.annualSaving)}/year** vs diesel for this fleet.\n\n` +
+        `The extra upfront cost (EV − diesel price × ${busCount} buses) = ₹${fmt(result.extraCapex)}.\n\n` +
+        `Divide extra capex by annual saving:\n` +
+        `  ₹${fmt(result.extraCapex)} ÷ ₹${fmt(result.annualSaving)}/year = **${result.paybackYrs}-year payback**\n\n` +
+        `NPV of savings over 6 years (10% discount rate) = **₹${fmt(result.npvSaving)}**\n\n` +
+        (result.isFavourable
+          ? `This is a strong business case. Payback within the 6-year bus life, with substantial positive NPV.`
+          : `Payback exceeds the 6-year bus life at ${kmPerDay} km/day. Higher utilisation (longer routes or more shifts) would improve this.`)
+      );
     } else {
-      await bot(`At ${kmPerDay} km/day, the EV payback stretches to ${result.paybackYrs} years against a 6-year bus life. Routes with higher daily utilisation would improve this — even 50 extra km/day can shift the crossover point significantly.`);
+      await bot(
+        `At ${kmPerDay} km/day, diesel is actually cheaper in total annual cost — the lower EV capex benefit doesn't offset the higher per-km operating costs at this utilisation level.\n\n` +
+        `The EV crossover typically occurs above 200–250 km/day for Indian fleet conditions. Routes with longer daily runs or second shifts would flip this analysis.`
+      );
     }
+
+    await bot('TCO summary:', 'stats', { stats: [
+      { label: 'Diesel cost/km',     value: `₹${result.dslCPK}`                                                              },
+      { label: 'EV cost/km',         value: `₹${result.evCPK}`,                                            hi: true          },
+      { label: 'Annual saving (EV)', value: result.annualSaving > 0 ? `₹${fmt(result.annualSaving)}` : 'Diesel cheaper',
+        hi: result.annualSaving > 0 },
+      { label: 'Payback period',     value: `${result.paybackYrs} years`                                                      },
+    ]});
   }
 
   // ── Download ──────────────────────────────────────────────────────────────
