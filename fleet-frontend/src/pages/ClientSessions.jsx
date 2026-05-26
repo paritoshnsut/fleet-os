@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, Copy, CheckCircle, Clock, MessageCircle, Trash2, X, Users, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react';
+import { Plus, Copy, CheckCircle, Clock, MessageCircle, Trash2, X, Users, ExternalLink } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 function timeAgo(date) {
@@ -125,10 +125,75 @@ function LinkModal({ session, onClose }) {
   );
 }
 
+// ── Full Transcript Modal ─────────────────────────────────────────────────────
+const TYPE_LABEL = {
+  stats:         '📊 Summary stats card',
+  gantt:         '📈 Bus schedule Gantt chart',
+  'charger-gantt': '⚡ Charger bay timeline chart',
+  table:         '📋 Data table',
+};
+
+function TranscriptModal({ session, onClose }) {
+  const convo = session.conversation || [];
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-4"
+      onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col"
+        onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
+          <div>
+            <h3 className="text-slate-800 font-bold text-sm">{session.client_name} — Full Transcript</h3>
+            <p className="text-slate-400 text-xs mt-0.5">{convo.length} messages</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 p-1 rounded-lg transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-3">
+          {convo.length === 0 ? (
+            <p className="text-slate-400 text-sm text-center py-8">No messages yet.</p>
+          ) : convo.map((msg, i) => {
+            const isBot = msg.role === 'bot';
+
+            if (msg.type !== 'text') {
+              return (
+                <div key={i} className="flex justify-start">
+                  <span className="text-xs text-slate-400 italic bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+                    {TYPE_LABEL[msg.type] || `[${msg.type}]`}
+                    {msg.meta?.title ? ` — ${msg.meta.title}` : ''}
+                  </span>
+                </div>
+              );
+            }
+
+            return (
+              <div key={i} className={cn('flex gap-2', !isBot && 'flex-row-reverse')}>
+                <div className={cn(
+                  'max-w-lg px-4 py-2.5 rounded-2xl text-xs leading-relaxed whitespace-pre-wrap',
+                  isBot
+                    ? 'bg-slate-50 border border-slate-200 text-slate-700 rounded-bl-sm'
+                    : 'bg-indigo-600 text-white rounded-br-sm'
+                )}>
+                  {String(msg.content)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Session Card ──────────────────────────────────────────────────────────────
 function SessionCard({ session, onDelete }) {
-  const [copied,   setCopied]   = useState(false);
-  const [showChat, setShowChat] = useState(false);
+  const [copied,      setCopied]      = useState(false);
+  const [showTranscript, setShowTranscript] = useState(false);
 
   const link  = `${window.location.origin}/?token=${session.token}`;
   const convo = session.conversation || [];
@@ -157,87 +222,76 @@ function SessionCard({ session, onDelete }) {
   ].filter(Boolean);
 
   return (
-    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-      <div className="px-5 py-4 flex items-start justify-between gap-4">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1 flex-wrap">
-            <h3 className="text-slate-800 font-semibold text-sm">{session.client_name}</h3>
-            <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium', statusStyle[session.status] ?? statusStyle.pending)}>
-              {session.status}
-            </span>
-            {analysesDone.length > 0 && analysesDone.map(a => (
-              <span key={a} className="px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-600">
-                {a}
+    <>
+      {showTranscript && (
+        <TranscriptModal session={session} onClose={() => setShowTranscript(false)} />
+      )}
+
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+        <div className="px-5 py-4 flex items-start justify-between gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
+              <h3 className="text-slate-800 font-semibold text-sm">{session.client_name}</h3>
+              <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium', statusStyle[session.status] ?? statusStyle.pending)}>
+                {session.status}
               </span>
-            ))}
+              {analysesDone.length > 0 && analysesDone.map(a => (
+                <span key={a} className="px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-600">
+                  {a}
+                </span>
+              ))}
+            </div>
+
+            {session.client_email && (
+              <p className="text-slate-400 text-xs mb-2">{session.client_email}</p>
+            )}
+
+            <div className="flex items-center gap-4 text-slate-400 text-xs flex-wrap">
+              <span className="flex items-center gap-1">
+                <Clock size={11} /> Created {timeAgo(session.created_at)}
+              </span>
+              {session.last_active_at && (
+                <span className="flex items-center gap-1">
+                  <Clock size={11} /> Active {timeAgo(session.last_active_at)}
+                </span>
+              )}
+              {convo.length > 0 && (
+                <span className="flex items-center gap-1">
+                  <MessageCircle size={11} /> {convo.length} messages
+                </span>
+              )}
+            </div>
           </div>
 
-          {session.client_email && (
-            <p className="text-slate-400 text-xs mb-2">{session.client_email}</p>
-          )}
-
-          <div className="flex items-center gap-4 text-slate-400 text-xs flex-wrap">
-            <span className="flex items-center gap-1">
-              <Clock size={11} /> Created {timeAgo(session.created_at)}
-            </span>
-            {session.last_active_at && (
-              <span className="flex items-center gap-1">
-                <Clock size={11} /> Active {timeAgo(session.last_active_at)}
-              </span>
-            )}
+          <div className="flex items-center gap-2 flex-shrink-0">
             {convo.length > 0 && (
-              <span className="flex items-center gap-1">
-                <MessageCircle size={11} /> {convo.length} messages
-              </span>
+              <button onClick={() => setShowTranscript(true)}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                <MessageCircle size={11} /> View chat
+              </button>
             )}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {convo.length > 0 && (
-            <button onClick={() => setShowChat(p => !p)}
-              className="flex items-center gap-1 px-3 py-1.5 text-xs text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
-              View chat {showChat ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+            <button onClick={openLink}
+              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+              title="Open client link">
+              <ExternalLink size={13} />
             </button>
-          )}
-          <button onClick={openLink}
-            className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
-            title="Open client link">
-            <ExternalLink size={13} />
-          </button>
-          <button onClick={copy}
-            className={cn(
-              'flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border font-medium transition-all',
-              copied
-                ? 'bg-green-50 border-green-200 text-green-700'
-                : 'bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100'
-            )}>
-            {copied ? <><CheckCircle size={11} /> Copied!</> : <><Copy size={11} /> Copy link</>}
-          </button>
-          <button onClick={() => onDelete(session.id)}
-            className="p-1.5 text-slate-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-colors">
-            <Trash2 size={13} />
-          </button>
+            <button onClick={copy}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border font-medium transition-all',
+                copied
+                  ? 'bg-green-50 border-green-200 text-green-700'
+                  : 'bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100'
+              )}>
+              {copied ? <><CheckCircle size={11} /> Copied!</> : <><Copy size={11} /> Copy link</>}
+            </button>
+            <button onClick={() => onDelete(session.id)}
+              className="p-1.5 text-slate-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-colors">
+              <Trash2 size={13} />
+            </button>
+          </div>
         </div>
       </div>
-
-      {showChat && convo.length > 0 && (
-        <div className="border-t border-slate-100 bg-slate-50 px-5 py-4 max-h-72 overflow-y-auto space-y-2">
-          {convo.filter(m => m.type === 'text').map((msg, i) => (
-            <div key={i} className={cn('flex gap-2', msg.role === 'user' ? 'flex-row-reverse' : '')}>
-              <div className={cn(
-                'max-w-xs px-3 py-2 rounded-xl text-xs leading-relaxed',
-                msg.role === 'bot'
-                  ? 'bg-white border border-slate-200 text-slate-700'
-                  : 'bg-indigo-600 text-white'
-              )}>
-                {String(msg.content).slice(0, 150)}{String(msg.content).length > 150 ? '…' : ''}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+    </>
   );
 }
 
