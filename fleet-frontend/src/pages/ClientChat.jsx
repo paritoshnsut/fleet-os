@@ -871,6 +871,7 @@ export default function ClientChat({ token }) {
   const [invalid,    setInvalid]    = useState(false);
 
   const [messages,   setMessages]   = useState([]);
+  const [readOnly,   setReadOnly]   = useState(false);
   const [typing,     setTyping]     = useState(false);
   const [inputText,  setInputText]  = useState('');
   const [inputOn,    setInputOn]    = useState(false);
@@ -1397,6 +1398,12 @@ export default function ClientChat({ token }) {
   useEffect(() => {
     if (!session || started.current) return;
     started.current = true;
+    if (session.conversation?.length > 0) {
+      setMessages(session.conversation);
+      if (session.results) resultsRef.current = session.results;
+      setReadOnly(true);
+      return;
+    }
     runFlow(session);
   }, [session]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1513,33 +1520,40 @@ export default function ClientChat({ token }) {
         <div ref={bottomRef} />
       </div>
 
-      {/* Input bar */}
-      <div className="border-t border-slate-200 bg-white px-6 py-4 max-w-3xl w-full mx-auto flex-shrink-0">
-        <div className={cn(
-          'flex items-center gap-3 rounded-2xl border px-4 py-3 transition-all',
-          inputOn
-            ? 'bg-white border-indigo-300 ring-2 ring-indigo-100'
-            : 'bg-slate-50 border-slate-200 opacity-60'
-        )}>
-          <input
-            className="flex-1 bg-transparent text-slate-800 placeholder-slate-400 text-sm outline-none"
-            placeholder={inputOn ? 'Type your answer and press Enter…' : 'Choose an option above…'}
-            value={inputText}
-            disabled={!inputOn}
-            onChange={e => setInputText(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleTextSubmit()}
-          />
-          <button onClick={handleTextSubmit} disabled={!inputOn || !inputText.trim()}
-            className={cn(
-              'w-8 h-8 rounded-xl flex items-center justify-center transition-all',
-              inputOn && inputText.trim()
-                ? 'bg-indigo-500 hover:bg-indigo-400 text-white'
-                : 'text-white/20 cursor-not-allowed'
-            )}>
-            <Send size={14} />
-          </button>
+      {/* Input bar / read-only notice */}
+      {readOnly ? (
+        <div className="border-t border-slate-200 bg-slate-50 px-6 py-3.5 max-w-3xl w-full mx-auto flex-shrink-0 flex items-center justify-center gap-2">
+          <CheckCircle size={14} className="text-green-500 flex-shrink-0" />
+          <p className="text-slate-400 text-xs">This session is complete — view only</p>
         </div>
-      </div>
+      ) : (
+        <div className="border-t border-slate-200 bg-white px-6 py-4 max-w-3xl w-full mx-auto flex-shrink-0">
+          <div className={cn(
+            'flex items-center gap-3 rounded-2xl border px-4 py-3 transition-all',
+            inputOn
+              ? 'bg-white border-indigo-300 ring-2 ring-indigo-100'
+              : 'bg-slate-50 border-slate-200 opacity-60'
+          )}>
+            <input
+              className="flex-1 bg-transparent text-slate-800 placeholder-slate-400 text-sm outline-none"
+              placeholder={inputOn ? 'Type your answer and press Enter…' : 'Choose an option above…'}
+              value={inputText}
+              disabled={!inputOn}
+              onChange={e => setInputText(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleTextSubmit()}
+            />
+            <button onClick={handleTextSubmit} disabled={!inputOn || !inputText.trim()}
+              className={cn(
+                'w-8 h-8 rounded-xl flex items-center justify-center transition-all',
+                inputOn && inputText.trim()
+                  ? 'bg-indigo-500 hover:bg-indigo-400 text-white'
+                  : 'text-white/20 cursor-not-allowed'
+              )}>
+              <Send size={14} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
