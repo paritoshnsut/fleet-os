@@ -110,19 +110,19 @@ function windowCost(start, n) {
   return c;
 }
 
-function runChargingSchedule(busList, numChargers) {
+function runScheduler(busList, numChargers) {
   const TOTAL = SLOTS_DAY * 2;
   const occ   = Array.from({ length: numChargers }, () => new Array(TOTAL).fill(null));
 
   const entries = busList.map(b => {
-    let outSlot  = hhmmToSlot(b.outTime) ?? 40;
-    let inSlot   = hhmmToSlot(b.inTime)  ?? 12;
+    let outSlot = hhmmToSlot(b.outTime) ?? 40;
+    let inSlot  = hhmmToSlot(b.inTime)  ?? 12;
     if (inSlot <= outSlot) inSlot += SLOTS_DAY;
-    const kwhNeeded = Number(b.kwhNeeded) || 90;
-    const numSlots  = Math.ceil(kwhNeeded / (CHARGER_KW * SLOT_MIN / 60));
-    const soc       = b.soc ?? 55;
-    return { ...b, outSlot, inSlot, kwhNeeded, numSlots, soc,
-      urgency: (100 - soc) * 100 + Math.max(0, 48 - (inSlot - outSlot)) };
+    const kwhNeeded = b.kwh ? Number(b.kwh) : 100;
+    const numSlots  = Math.ceil(kwhNeeded / (CHARGER_KW * (SLOT_MIN / 60)));
+    const soc       = b.soc ?? 60;
+    const urgency   = (100 - soc) * 100 + Math.max(0, 48 - (inSlot - outSlot));
+    return { ...b, outSlot, inSlot, kwhNeeded, numSlots, soc, urgency };
   }).sort((a, b) => b.urgency - a.urgency);
 
   const scheduled = [], conflicts = [];
@@ -147,26 +147,57 @@ function runChargingSchedule(busList, numChargers) {
       const naiveCost = windowCost(outSlot, numSlots);
       scheduled.push({
         busId:       bus.busId,
-        charger:     `C-${String(bestCharger + 1).padStart(2,'0')}`,
+        charger:     `C-${String(bestCharger + 1).padStart(2, '0')}`,
+        arrives:     bus.outTime,
+        departs:     bus.inTime,
         chargeStart: slotToHHMM(bestStart),
         chargeEnd:   slotToHHMM(bestStart + numSlots),
         delayed:     bestStart > outSlot,
         delayMins:   (bestStart - outSlot) * SLOT_MIN,
         kWh:         bus.kwhNeeded,
         cost:        Math.round(bestCost),
+        naiveCost:   Math.round(naiveCost),
         savings:     Math.round(naiveCost - bestCost),
+        isUrgent:    bus.soc < 25,
       });
     } else {
-      conflicts.push({ busId: bus.busId });
+      conflicts.push({ busId: bus.busId, reason: 'All chargers occupied during available window' });
     }
   }
 
+  const totalCost      = scheduled.reduce((s, r) => s + r.cost, 0);
+  const totalNaiveCost = scheduled.reduce((s, r) => s + r.naiveCost, 0);
   return {
-    scheduled,
-    conflicts,
-    totalCost:    scheduled.reduce((s, b) => s + b.cost, 0),
-    totalSavings: scheduled.reduce((s, b) => s + b.savings, 0),
+    scheduled, conflicts, totalCost, totalNaiveCost,
+    totalSavings: totalNaiveCost - totalCost,
+    savingsPct:   totalNaiveCost > 0
+      ? Math.round((totalNaiveCost - totalCost) / totalNaiveCost * 100) : 0,
   };
+}
+
+function busFromBackendLeg(bus) {
+  const endMins   = bus.legs.map(l => l.end_min);
+  const startMins = bus.legs.map(l => l.start_min);
+  const toHM = m => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  return {
+    busId:    `Bus-${String(bus.bus_id).padStart(3, '0')}`,
+    outTime:  toHM(Math.max(...endMins)),    // latest return = charge window start
+    inTime:   toHM(Math.min(...startMins)),  // earliest departure = charge window end
+    kwh:      null, soc: 60,
+    numTrips: bus.leg_count,
+    routes:   bus.legs.map(l => l.route_name),
+  };
+}
+
+function findMinChargers(busList) {
+  if (!busList.length) return 1;
+  let lo = 1, hi = busList.length, result = busList.length;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (runScheduler(busList, mid).conflicts.length === 0) { result = mid; hi = mid - 1; }
+    else lo = mid + 1;
+  }
+  return result;
 }
 
 // ── TCO Comparison ────────────────────────────────────────────────────────────
@@ -486,6 +517,199 @@ function BusGantt({ msg }) {
   );
 }
 
+function ChargerGantt({ msg }) {
+  const containerRef = useRef(null);
+  const [svgWidth, setSvgWidth] = useState(700);
+  const [expanded, setExpanded] = useState(false);
+
+  const scheduled = msg.meta?.scheduled || [];
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const ro = new ResizeObserver(([e]) =>
+      setSvgWidth(Math.floor(e.contentRect.width) || 700)
+    );
+    ro.observe(containerRef.current);
+    setSvgWidth(Math.floor(containerRef.current.offsetWidth) || 700);
+    return () => ro.disconnect();
+  }, []);
+
+  const groups = {};
+  for (const b of scheduled) {
+    if (!groups[b.charger]) groups[b.charger] = [];
+    groups[b.charger].push(b);
+  }
+  const allChargers = Object.keys(groups).sort();
+  const shown = expanded ? allChargers : allChargers.slice(0, 12);
+
+  function toAbsMin(hhmm) {
+    if (!hhmm) return 0;
+    const [h, m] = String(hhmm).split(':').map(Number);
+    let min = h * 60 + (m || 0);
+    if (min < 14 * 60) min += 24 * 60;
+    return min;
+  }
+
+  const allMins = scheduled.flatMap(b => [toAbsMin(b.arrives), toAbsMin(b.departs)]);
+  const T_START = allMins.length ? Math.max(14 * 60, Math.floor(Math.min(...allMins) / 60) * 60 - 60) : 19 * 60;
+  const T_END   = allMins.length ? Math.min(38 * 60, Math.ceil(Math.max(...allMins)  / 60) * 60 + 60) : 31 * 60;
+  const T_RANGE = T_END - T_START;
+
+  const ROW_H    = 36;
+  const TARIFF_H = 48;
+  const PAD_L    = 58;
+  const PAD_R    = 16;
+  const PAD_T    = 12;
+  const PAD_B    = 28;
+  const W        = Math.max(100, svgWidth - PAD_L - PAD_R);
+  const SVG_H    = PAD_T + TARIFF_H + 8 + shown.length * ROW_H + PAD_B;
+
+  function tx(hhmm) {
+    if (!hhmm) return 0;
+    return Math.max(0, Math.min(W, ((toAbsMin(hhmm) - T_START) / T_RANGE) * W));
+  }
+
+  const startH = Math.floor(T_START / 60);
+  const endH   = Math.ceil(T_END / 60);
+  const tariffMin = Math.min(...HOUR_TARIFF);
+  const tariffMax = Math.max(...HOUR_TARIFF);
+  const tariffRange = tariffMax - tariffMin || 1;
+
+  const bands = [];
+  for (let h = startH; h < endH; h++) {
+    const rate = HOUR_TARIFF[h % 24];
+    const norm = (rate - tariffMin) / tariffRange;
+    const x    = Math.max(0, ((h * 60 - T_START) / T_RANGE) * W);
+    const bw   = (60 / T_RANGE) * W;
+    bands.push({ h, rate, norm, x, bw, barH: Math.round(norm * TARIFF_H * 0.80) + 5 });
+  }
+
+  const ticks = [];
+  for (let h = startH; h <= endH; h += 2) {
+    const x = ((h * 60 - T_START) / T_RANGE) * W;
+    if (x >= -1 && x <= W + 1)
+      ticks.push({ x, label: `${String(h % 24).padStart(2, '0')}:00` });
+  }
+
+  const COLORS = { optimised: '#10b981', immediate: '#6366f1', urgent: '#f97316' };
+  function barColor(b) {
+    return b.isUrgent ? COLORS.urgent : b.delayed ? COLORS.optimised : COLORS.immediate;
+  }
+
+  return (
+    <div className="flex gap-2 items-start">
+      <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center flex-shrink-0 mt-1">
+        <Bot size={14} className="text-white" />
+      </div>
+      <div className="flex-1 bg-white border border-slate-200 rounded-2xl p-4 shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <div>
+            <p className="text-slate-700 text-sm font-semibold">{msg.meta?.title || 'Charger Bay Timeline'}</p>
+            <p className="text-slate-400 text-xs mt-0.5">Each row = one charger · bars = charging windows · background = tariff intensity</p>
+          </div>
+          <div className="flex items-center gap-4 text-xs flex-wrap">
+            {[
+              [COLORS.optimised, 'Delayed (off-peak)'],
+              [COLORS.immediate, 'Immediate'],
+              [COLORS.urgent,    'Urgent (low SoC)'],
+            ].map(([col, label]) => (
+              <span key={label} className="flex items-center gap-1.5 text-slate-500">
+                <span className="w-2.5 h-2.5 rounded-sm inline-block flex-shrink-0" style={{ backgroundColor: col }} />
+                {label}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div ref={containerRef} className="relative w-full">
+          <svg width="100%" height={SVG_H}
+            viewBox={`0 0 ${svgWidth} ${SVG_H}`}
+            className="select-none"
+            style={{ overflow: 'visible' }}
+          >
+            {bands.map(b => (
+              <rect key={`bg-${b.h}`}
+                x={PAD_L + b.x} y={PAD_T}
+                width={Math.max(0.5, b.bw)}
+                height={TARIFF_H + 8 + shown.length * ROW_H}
+                fill={`hsl(${Math.round((1 - b.norm) * 120)},80%,52%)`}
+                opacity={0.022 + b.norm * 0.085}
+              />
+            ))}
+            {bands.map(b => (
+              <rect key={`bar-${b.h}`}
+                x={PAD_L + b.x + 1.5} y={PAD_T + TARIFF_H - b.barH}
+                width={Math.max(0.5, b.bw - 3)} height={b.barH}
+                fill={`hsl(${Math.round((1 - b.norm) * 120)},68%,44%)`}
+                opacity={0.82} rx="2"
+              />
+            ))}
+            <text x={PAD_L - 6} y={PAD_T + 10}              textAnchor="end" fontSize="8" fill="#94a3b8">₹{tariffMax.toFixed(1)}</text>
+            <text x={PAD_L - 6} y={PAD_T + TARIFF_H - 2}    textAnchor="end" fontSize="8" fill="#94a3b8">₹{tariffMin.toFixed(1)}</text>
+            <text x={PAD_L - 6} y={PAD_T + TARIFF_H / 2 + 4} textAnchor="end" fontSize="7" fill="#cbd5e1">₹/kWh</text>
+            <line x1={PAD_L} y1={PAD_T + TARIFF_H + 4}
+                  x2={PAD_L + W} y2={PAD_T + TARIFF_H + 4}
+              stroke="#e2e8f0" strokeWidth="1.5" />
+            {ticks.map(t => (
+              <g key={t.label}>
+                <line x1={PAD_L + t.x} y1={PAD_T + TARIFF_H + 4}
+                      x2={PAD_L + t.x} y2={PAD_T + TARIFF_H + 8 + shown.length * ROW_H}
+                  stroke="#f1f5f9" strokeWidth="1" strokeDasharray="3,4" />
+                <text x={PAD_L + t.x} y={SVG_H - 7}
+                  textAnchor="middle" fontSize="9" fill="#94a3b8">{t.label}</text>
+              </g>
+            ))}
+            {shown.map((charger, ci) => {
+              const y0 = PAD_T + TARIFF_H + 8 + ci * ROW_H;
+              return (
+                <g key={charger}>
+                  <rect x={PAD_L} y={y0 + 1} width={W} height={ROW_H - 1}
+                    fill={ci % 2 === 0 ? '#f8fafc' : '#ffffff'} />
+                  <text x={PAD_L - 7} y={y0 + ROW_H / 2 + 4}
+                    textAnchor="end" fontSize="9" fill="#64748b" fontWeight="600">{charger}</text>
+                  {(groups[charger] || []).map(bus => {
+                    const cx  = tx(bus.chargeStart);
+                    const ex  = tx(bus.chargeEnd);
+                    const bw  = Math.max(4, ex - cx);
+                    const col = barColor(bus);
+                    return (
+                      <g key={bus.busId}>
+                        <rect x={PAD_L + cx} y={y0 + 6}
+                          width={bw} height={ROW_H - 12}
+                          fill={col} rx="5" opacity={0.85} />
+                        {bw > 32 && (
+                          <text x={PAD_L + cx + bw / 2} y={y0 + ROW_H / 2 + 4}
+                            textAnchor="middle" fontSize={bw > 54 ? '8' : '7'}
+                            fill="white" fontWeight="700" opacity={0.95}>
+                            {bus.busId.replace(/^Bus-0*/, 'B')}
+                          </text>
+                        )}
+                      </g>
+                    );
+                  })}
+                </g>
+              );
+            })}
+            <line x1={PAD_L} y1={PAD_T}
+                  x2={PAD_L} y2={PAD_T + TARIFF_H + 8 + shown.length * ROW_H}
+              stroke="#e2e8f0" strokeWidth="1" />
+          </svg>
+        </div>
+
+        {allChargers.length > 12 && (
+          <button onClick={() => setExpanded(p => !p)}
+            className="mt-2 w-full flex items-center justify-center gap-1.5 text-xs text-slate-400
+              hover:text-slate-600 transition-colors py-1.5 border border-slate-200 rounded-lg">
+            {expanded
+              ? <><ChevronUp size={12} /> Show fewer</>
+              : <><ChevronDown size={12} /> Show all {allChargers.length} chargers</>}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TypingIndicator() {
   return (
     <div className="flex gap-2 items-end">
@@ -530,6 +754,7 @@ function ChatBubble({ msg }) {
   }
 
   if (msg.type === 'gantt') return <BusGantt msg={msg} />;
+  if (msg.type === 'charger-gantt') return <ChargerGantt msg={msg} />;
 
   if (msg.type === 'table') {
     return (
@@ -900,56 +1125,68 @@ export default function ClientChat({ token }) {
   // ── Charging ──────────────────────────────────────────────────────────────
   async function doCharge() {
     await bot(
-      `For the charging plan, here's what I'll do:\n\n` +
-      `1. Each bus charges overnight — from when it returns to depot to when it departs next morning\n` +
-      `2. The tariff varies by hour: off-peak (23:00–06:00) is ₹3.8–4.2/kWh; peak (07:00–10:00, 17:00–21:00) can be ₹8–9.5/kWh\n` +
-      `3. I'll shift each bus's charge window toward off-peak hours to minimise cost\n` +
-      `4. First, I'll calculate the minimum number of chargers needed so every bus can charge overnight`
+      `For the charging plan:\n\n` +
+      `1. Each bus charges overnight — from when it returns to depot until next morning's departure\n` +
+      `2. Tariff varies by hour: off-peak (23:00–06:00) ₹3.8–4.2/kWh; peak (07:00–10:00, 17:00–21:00) ₹8–9.5/kWh\n` +
+      `3. The scheduler shifts each bus to the cheapest available overnight window\n` +
+      `4. First I'll calculate the minimum chargers so every bus fits within its overnight window`
     );
     await delay(1200);
 
-    const tripResult = resultsRef.current.trip || runOptimalSchedule(fleetRef.current.trips, 0);
-
-    // Build input with CORRECT overnight charging window: return time → next morning departure
-    const rng = (a, b) => a + Math.round(Math.random() * (b - a));
-    const input = tripResult.buses.map(bus => ({
-      busId:     `Bus ${bus.id}`,
-      outTime:   bus.legs[bus.legs.length - 1]?.inTime,  // charge window START = evening return
-      inTime:    bus.legs[0]?.outTime,                    // charge window END   = next morning departure
-      kwhNeeded: rng(75, 120),
-      soc:       rng(35, 65),
-    }));
-
-    // Binary-search for minimum chargers (much faster than linear scan for large fleets)
-    let lo = 1, hi = input.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      runChargingSchedule(input, mid).conflicts.length === 0 ? (hi = mid) : (lo = mid + 1);
+    let busList = [];
+    try {
+      if (!rawFileRef.current) throw new Error('no file');
+      const fd = new FormData();
+      fd.append('file', rawFileRef.current);
+      fd.append('benchmark_buses', 999);
+      const res = await fetch(`${OPTIMIZER_URL}/optimize`, { method: 'POST', body: fd });
+      if (!res.ok) throw new Error('API error');
+      const data = await res.json();
+      busList = data.greedy.buses.map(busFromBackendLeg);
+    } catch {
+      // Fallback: convert stored trip result or recompute
+      const tripResult = resultsRef.current.trip;
+      if (tripResult?.buses) {
+        busList = tripResult.buses.map(bus => ({
+          busId:    `Bus-${String(bus.id).padStart(3, '0')}`,
+          outTime:  bus.legs[bus.legs.length - 1]?.inTime,
+          inTime:   bus.legs[0]?.outTime,
+          kwh: null, soc: 60,
+        }));
+      } else {
+        const r = runOptimalSchedule(fleetRef.current.trips, 0);
+        busList = r.buses.map(bus => ({
+          busId:    `Bus-${String(bus.id).padStart(3, '0')}`,
+          outTime:  bus.legs[bus.legs.length - 1]?.inTime,
+          inTime:   bus.legs[0]?.outTime,
+          kwh: null, soc: 60,
+        }));
+      }
     }
-    const minChargers = lo;
+
+    const minChargers = findMinChargers(busList);
 
     await bot(
       `Minimum chargers required: ${minChargers}\n\n` +
-      `With ${minChargers} charger${minChargers !== 1 ? 's' : ''}, every bus fits within its overnight window (typically 8–10 hours between return and next departure).\n\n` +
-      `How many chargers does your depot actually have? (Type a number, or press Enter to use the minimum of ${minChargers})`
+      `With ${minChargers} charger${minChargers !== 1 ? 's' : ''}, every bus fits within its overnight window.\n\n` +
+      `How many chargers does your depot have? (Type a number, or press Enter to use the minimum of ${minChargers})`
     );
     const text        = await waitText();
     const numChargers = parseInt(text) || minChargers;
 
     await bot(
       `Scheduling charges across ${numChargers} charger${numChargers !== 1 ? 's' : ''}.\n\n` +
-      `The optimiser assigns each bus the cheapest available overnight window on a free charger — ` +
-      `prioritising low-urgency buses first so high-urgency buses (low SoC, short overnight window) always get priority access.`
+      `Each bus is assigned the cheapest available overnight window — high-urgency buses (low SoC, short window) get priority access.`
     );
-    await delay(1800);
+    await delay(1500);
 
-    const result = runChargingSchedule(input, numChargers);
+    const result = runScheduler(busList, numChargers);
     resultsRef.current = { ...resultsRef.current, charge: result };
 
     const delayedCount = result.scheduled.filter(b => b.delayed).length;
     await bot(
       `Charging plan complete.\n\n` +
-      `${delayedCount} of ${result.scheduled.length} buses had their charge start shifted to a cheaper tariff window — ` +
+      `${delayedCount} of ${result.scheduled.length} buses had their charge shifted to a cheaper tariff window — ` +
       `saving ₹${fmt(result.totalSavings)} vs charging immediately on return. ` +
       `That's ₹${fmt(Math.round(result.totalSavings / Math.max(1, result.scheduled.length)))} saved per bus per day.`
     );
@@ -961,43 +1198,25 @@ export default function ClientChat({ token }) {
       { label: 'Saved vs immediate charge',value: `₹${fmt(result.totalSavings)}`           },
     ]});
 
-    // Charging Gantt — one row per charger
-    const chargerIds = [...new Set(result.scheduled.map(s => s.charger))].sort();
-    if (chargerIds.length > 0) {
-      const ganttRows = chargerIds.map(ch => ({
-        label: ch,
-        bars: result.scheduled.filter(s => s.charger === ch).map(s => {
-          const start = timeToMin(s.chargeStart);
-          let end     = timeToMin(s.chargeEnd);
-          if (end <= start) end += 1440;   // overnight wrap
-          return { startMin: start, endMin: end, color: s.delayed ? 'rgba(234,179,8,0.8)' : 'rgba(16,185,129,0.8)' };
-        }),
-      }));
-      const allMins = ganttRows.flatMap(r => r.bars.flatMap(b => [b.startMin, b.endMin]));
-      addMsg({ id: Date.now() + Math.random(), role: 'bot', type: 'gantt', content: null, meta: {
-        title: `Charging Schedule Gantt — each row = 1 charger, † = next-day time`,
-        timeStartMin: Math.min(...allMins),
-        timeEndMin:   Math.max(...allMins),
-        rows: ganttRows,
-        legend: [
-          { label: 'Shifted to off-peak (saving cost)', color: 'rgba(234,179,8,0.8)' },
-          { label: 'Charged immediately on return',      color: 'rgba(16,185,129,0.8)' },
-        ],
-      }});
-    }
+    addMsg({ id: Date.now() + Math.random(), role: 'bot', type: 'charger-gantt', content: null, meta: {
+      title: `Charger Bay Timeline — ${numChargers} bay${numChargers !== 1 ? 's' : ''} · ${result.scheduled.length} buses`,
+      scheduled: result.scheduled,
+    }});
 
     if (result.scheduled.length > 0) {
       await bot('Per-bus charging slots:', 'table', {
-        headers: ['Bus', 'Charger', 'Start', 'End', 'kWh', 'Cost (₹)', 'Saved (₹)'],
-        rows: result.scheduled.map(b => [
-          b.busId, b.charger, b.chargeStart, b.chargeEnd,
-          b.kWh, fmt(b.cost), fmt(b.savings),
+        headers: ['Bus', 'Charger', 'Window', 'Charged', 'kWh', 'Cost (₹)', 'Saved (₹)'],
+        rows: result.scheduled.slice(0, 40).map(b => [
+          b.busId, b.charger,
+          `${b.arrives} → ${b.departs}`,
+          `${b.chargeStart} – ${b.chargeEnd}`,
+          b.kWh, fmt(b.cost), b.savings > 0 ? fmt(b.savings) : '—',
         ]),
       });
     }
 
     if (result.conflicts.length > 0) {
-      await bot(`⚠️ ${result.conflicts.length} bus${result.conflicts.length > 1 ? 'es' : ''} couldn't be scheduled — their overnight window is shorter than their charge time. Adding one more charger or using mid-day opportunity charging would resolve this.`);
+      await bot(`⚠️ ${result.conflicts.length} bus${result.conflicts.length > 1 ? 'es' : ''} couldn't be scheduled — overnight window shorter than charge time. Adding one more charger or using mid-day opportunity charging would resolve this.`);
     }
   }
 
