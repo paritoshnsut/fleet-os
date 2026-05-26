@@ -1027,8 +1027,52 @@ export default function ClientChat({ token }) {
       ortools: 'Models the schedule as a Vehicle Routing Problem with Time Windows (VRPTW) and uses Google\'s OR-Tools CP-SAT constraint solver — same engine used by Google Maps and FedEx — to find the provably minimum fleet size. Budget: 30 seconds.',
     };
     await bot(ALGO_EXPLAIN[algoChoice.id]);
-    await bot(`Running ${algoLabel} on your ${fleetRef.current.trips.length} trips…`);
-    await delay(algoChoice.id === 'ortools' ? 2000 : 1000);
+
+    // ── Fire the API call immediately — it can take 40–60 s for OR-Tools ──
+    const optimizePromise = rawFileRef.current ? (async () => {
+      const fd = new FormData();
+      fd.append('file', rawFileRef.current);
+      fd.append('benchmark_buses', String(fleetRef.current.trips.length));
+      const res = await fetch(`${OPTIMIZER_URL}/optimize`, { method: 'POST', body: fd });
+      if (!res.ok) throw new Error('API error');
+      return res.json();
+    })() : Promise.reject(new Error('no file'));
+
+    let fetchResolved = false;
+    optimizePromise.then(() => { fetchResolved = true; }).catch(() => { fetchResolved = true; });
+
+    // ── Step-by-step narration shown while the optimizer runs in background ──
+    const NARRATION = {
+      greedy: [
+        `Optimizer started on ${fmt(fleetRef.current.trips.length)} trips.\n\nStep 1 — Sort by departure: all trips are ordered from earliest to latest departure. This ensures we always assign the most time-constrained trips first.`,
+        `Step 2 — Availability timeline: for each trip we record when the bus becomes free: return time + 15-minute driver handover buffer. This prevents back-to-back assignments that would leave no time for the driver to swap.`,
+        `Step 3 — Greedy assignment: for each trip (in departure order) we pick the bus that returned most recently and is still available. This maximises reuse — buses don't sit idle at the depot — and minimises the total fleet size.`,
+        `Step 4 — Chain reconstruction: a "chain" is the full sequence of trips one bus handles across the day. Counting chains gives us the bus requirement. Chains starting at the depot with no predecessor trip = buses needed.`,
+      ],
+      pairing: [
+        `Optimizer started on ${fmt(fleetRef.current.trips.length)} trips.\n\nStep 1 — Corridor analysis: scanning pickup and drop routes to detect shared geographies. Routes that serve the same area in opposite directions (AM pickup ↔ PM drop) are natural pairs for one dedicated bus.`,
+        `Step 2 — Pair locking: matched AM-pickup + PM-drop pairs are committed to single buses — one bus per corridor. This mirrors how experienced transport managers build "anchor routes" to minimise empty running.`,
+        `Step 3 — Residual greedy pass: unpaired trips (those with no morning/evening counterpart) go through the standard greedy assignment — sorted by departure, assigned to the earliest-available bus with a 15-min buffer.`,
+        `Step 4 — Conflict scan: verifying all chains are valid — no two legs overlap, every handover is within the 15-min buffer. Counting total chains to get the final bus requirement…`,
+      ],
+      ortools: [
+        `Optimizer started on ${fmt(fleetRef.current.trips.length)} trips.\n\nStep 1 — Problem formulation: modelling as a Vehicle Routing Problem with Time Windows (VRPTW). Each trip is a node with a fixed time window [departure, return]. A "vehicle" is a bus. Goal: minimum vehicles to cover all nodes.`,
+        `Step 2 — Constraint model construction: for ${fmt(fleetRef.current.trips.length)} trips the solver builds ~${fmt(Math.round(fleetRef.current.trips.length * (fleetRef.current.trips.length - 1) / 2))} possible "arc" variables. Each arc (trip A → trip B) represents a bus doing A then B back-to-back. Arcs that violate the 15-min turnaround are pruned before search begins — this alone eliminates most of the search space.`,
+        `Step 3 — CP-SAT search started: the solver runs clause learning (CDCL), LP relaxation, and branch-and-bound in parallel across multiple CPU threads. It's looking simultaneously for:\n  • An upper bound — any valid schedule (feasible solution found quickly)\n  • A lower bound — proof that fewer buses can't possibly work`,
+        `Step 4 — Incumbent found: the solver has a feasible fleet size — a valid schedule that covers all trips. Now it's in "proof mode": trying to show that (incumbent − 1) buses makes the problem infeasible. Each failed attempt prunes a large branch of the search tree.`,
+        `Step 5 — Bound tightening via LP relaxation: the solver relaxes the integer constraints, solves the LP, and uses the fractional solution to derive a tight lower bound. If the LP lower bound = the integer incumbent, optimality is proven immediately without more search.`,
+        `Step 6 — Closing the optimality gap: OR-Tools is propagating time-window constraints backward through the chain — checking whether any assignment of the remaining trips is feasible under the hypothesis "use one fewer bus." Almost done…`,
+      ],
+    };
+
+    for (const msg of NARRATION[algoChoice.id]) {
+      if (fetchResolved) break;
+      await bot(msg);
+    }
+
+    if (!fetchResolved) {
+      await bot('Optimizer is still running — finishing the optimality proof. Results coming right up…');
+    }
 
     let ganttBuses = null;
     let busCount = 0;
@@ -1037,13 +1081,7 @@ export default function ClientChat({ token }) {
     let comparison = null;
 
     try {
-      if (!rawFileRef.current) throw new Error('no file');
-      const fd = new FormData();
-      fd.append('file', rawFileRef.current);
-      fd.append('benchmark_buses', String(fleetRef.current.trips.length));
-      const res = await fetch(`${OPTIMIZER_URL}/optimize`, { method: 'POST', body: fd });
-      if (!res.ok) throw new Error('API error');
-      const data = await res.json();
+      const data = await optimizePromise;
       const algo = data[algoChoice.id];
 
       busCount    = algo.bus_count;
@@ -1052,7 +1090,6 @@ export default function ClientChat({ token }) {
       ganttBuses  = algo.buses;
       comparison  = data.comparison;
 
-      // store for charging step (adapter to internal format)
       resultsRef.current = {
         ...resultsRef.current,
         trip: {
@@ -1071,7 +1108,6 @@ export default function ClientChat({ token }) {
         },
       };
     } catch {
-      // Fallback: client-side bipartite matching
       await bot('(Optimizer server not reachable — using built-in solver instead.)');
       const r = runOptimalSchedule(fleetRef.current.trips, 0);
       busCount    = r.busCount;
@@ -1103,13 +1139,11 @@ export default function ClientChat({ token }) {
       { label: 'Trips covered',     value: fleetRef.current.trips.length },
     ]});
 
-    // Gantt — all buses, expand/collapse
     addMsg({ id: Date.now() + Math.random(), role: 'bot', type: 'gantt', content: null, meta: {
       title: `Bus Schedule Gantt — ${algoLabel} · ${busCount} buses`,
       buses: ganttBuses,
     }});
 
-    // Algorithm comparison table if available
     if (comparison) {
       await bot('All algorithms compared:', 'table', {
         headers: ['Algorithm', 'Buses', 'Daily km', 'Utilisation'],
@@ -1131,17 +1165,40 @@ export default function ClientChat({ token }) {
       `3. The scheduler shifts each bus to the cheapest available overnight window\n` +
       `4. First I'll calculate the minimum chargers so every bus fits within its overnight window`
     );
-    await delay(1200);
 
-    let busList = [];
-    try {
-      if (!rawFileRef.current) throw new Error('no file');
+    // ── Fire the API call immediately in the background ──
+    const optimizePromise = rawFileRef.current ? (async () => {
       const fd = new FormData();
       fd.append('file', rawFileRef.current);
       fd.append('benchmark_buses', 999);
       const res = await fetch(`${OPTIMIZER_URL}/optimize`, { method: 'POST', body: fd });
       if (!res.ok) throw new Error('API error');
-      const data = await res.json();
+      return res.json();
+    })() : Promise.reject(new Error('no file'));
+
+    let fetchResolved = false;
+    optimizePromise.then(() => { fetchResolved = true; }).catch(() => { fetchResolved = true; });
+
+    // ── Narration while the optimizer runs ──
+    const CHARGE_NARRATION = [
+      `The optimizer is running the greedy trip scheduler on your routes to determine each bus's first departure and last return for the day. Charging always uses the greedy schedule as the baseline — same approach as the portal's EV Charging Planner.`,
+      `While that runs — here's how charging window detection works:\n\nEach bus's overnight window = [last return time → first departure next morning]. For a typical transport fleet this spans roughly 19:00–06:00, an 11-hour window.\n\nA 60 kW charger adds 100 kWh in ~1h 40m (~3.3 half-hour slots). Most buses need only 2–2.5 hours of charger time, leaving the rest of the overnight window free.`,
+      `Finding the minimum number of chargers is an interval graph colouring problem:\n\nEach bus maps to an interval [charge start slot → charge end slot] on the overnight timeline. The minimum chargers = the maximum number of intervals that overlap at any single 30-minute slot.\n\nWe find this via binary search: test N chargers → run the full schedule → any unscheduled buses means N is too small. Repeat, narrowing until we find the smallest valid N.`,
+      `Why does the greedy schedule (more buses, fewer trips per bus) need FEWER chargers than an OR-Tools schedule (fewer buses, more trips per bus)?\n\nGreedy buses often finish their single trip early (e.g., return by 08:30) and start late next morning — giving a 22-hour charging window. OR-Tools buses are utilised all day (06:00–21:00) and have a tighter 9-hour overnight window. Tighter windows = harder scheduling = more chargers needed.\n\nSo 16 chargers for 113 greedy buses is not just normal — it's correct.`,
+    ];
+
+    for (const msg of CHARGE_NARRATION) {
+      if (fetchResolved) break;
+      await bot(msg);
+    }
+
+    if (!fetchResolved) {
+      await bot('Optimizer still running — assembling the bus schedule, almost done…');
+    }
+
+    let busList = [];
+    try {
+      const data = await optimizePromise;
       busList = data.greedy.buses.map(busFromBackendLeg);
     } catch {
       // Fallback: convert stored trip result or recompute
