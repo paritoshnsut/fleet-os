@@ -125,16 +125,236 @@ function LinkModal({ session, onClose }) {
   );
 }
 
-// ── Full Transcript Modal ─────────────────────────────────────────────────────
-const TYPE_LABEL = {
-  stats:         '📊 Summary stats card',
-  gantt:         '📈 Bus schedule Gantt chart',
-  'charger-gantt': '⚡ Charger bay timeline chart',
-  table:         '📋 Data table',
-};
+// ── Mini chart components for admin transcript view ───────────────────────────
+const HOUR_TARIFF = [4.2,4.0,3.8,3.8,3.9,4.2,5.1,6.8,8.2,9.5,9.5,8.0,7.0,6.5,6.2,6.8,7.5,8.8,9.2,9.0,8.0,6.5,5.2,4.5];
+const TRIP_COLORS = { pickup: '#3b82f6', drop: '#10b981', both: '#8b5cf6' };
 
+function MiniBusGantt({ meta }) {
+  const buses = meta?.buses || [];
+  const [expanded, setExpanded] = useState(false);
+  const shown = expanded ? buses : buses.slice(0, 10);
+  const START = 300, END = 1380;
+  const toX = min => Math.max(0, Math.min(100, ((min - START) / (END - START)) * 100));
+  const hours = Array.from({ length: 19 }, (_, i) => 5 + i);
+
+  return (
+    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+      <p className="text-slate-600 text-xs font-semibold mb-2">{meta?.title || 'Bus Schedule Gantt'}</p>
+      <div className="relative h-4 mb-1 ml-14 mr-10">
+        {hours.filter(h => h % 2 === 0).map(h => (
+          <span key={h} className="absolute text-[9px] text-slate-400 -translate-x-1/2"
+            style={{ left: `${toX(h * 60)}%` }}>
+            {String(h).padStart(2, '0')}:00
+          </span>
+        ))}
+      </div>
+      <div className="space-y-px">
+        {shown.map(bus => (
+          <div key={bus.bus_id} className="flex items-center gap-2">
+            <span className="text-[9px] text-slate-400 w-12 text-right flex-shrink-0">Bus {bus.bus_id}</span>
+            <div className="relative flex-1 h-4 bg-slate-200 rounded overflow-hidden">
+              {hours.map(h => (
+                <div key={h} className="absolute top-0 bottom-0 w-px bg-slate-300" style={{ left: `${toX(h * 60)}%` }} />
+              ))}
+              {(bus.legs || []).map((leg, i) => {
+                const x = toX(leg.start_min);
+                const w = Math.max(0.4, toX(leg.end_min) - x);
+                return (
+                  <div key={i} className="absolute h-full rounded-sm opacity-85"
+                    style={{ left: `${x}%`, width: `${w}%`, background: TRIP_COLORS[leg.trip_type] ?? '#94a3b8' }} />
+                );
+              })}
+            </div>
+            <span className="text-[9px] text-slate-400 w-10 flex-shrink-0">
+              {bus.run_km != null ? `${bus.run_km}km` : ''}
+            </span>
+          </div>
+        ))}
+      </div>
+      {buses.length > 10 && (
+        <button onClick={() => setExpanded(p => !p)}
+          className="mt-2 text-[10px] text-indigo-500 hover:text-indigo-700 transition-colors">
+          {expanded ? 'Show less' : `Show all ${buses.length} buses`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function MiniChargerGantt({ meta }) {
+  const scheduled = meta?.scheduled || [];
+  const [expanded, setExpanded] = useState(false);
+
+  const groups = {};
+  for (const b of scheduled) {
+    if (!groups[b.charger]) groups[b.charger] = [];
+    groups[b.charger].push(b);
+  }
+  const chargers = Object.keys(groups).sort();
+  const shown = expanded ? chargers : chargers.slice(0, 10);
+
+  function toAbsMin(hhmm) {
+    if (!hhmm) return 0;
+    const [h, m] = String(hhmm).split(':').map(Number);
+    let min = h * 60 + (m || 0);
+    if (min < 14 * 60) min += 24 * 60;
+    return min;
+  }
+
+  const allMins = scheduled.flatMap(b => [toAbsMin(b.arrives), toAbsMin(b.departs)]);
+  const T_START = allMins.length ? Math.max(14*60, Math.floor(Math.min(...allMins)/60)*60 - 60) : 19*60;
+  const T_END   = allMins.length ? Math.min(38*60, Math.ceil(Math.max(...allMins)/60)*60  + 60) : 31*60;
+  const T_RANGE = T_END - T_START;
+  const toX = hhmm => Math.max(0, Math.min(100, ((toAbsMin(hhmm) - T_START) / T_RANGE) * 100));
+
+  const startH = Math.floor(T_START / 60), endH = Math.ceil(T_END / 60);
+  const tariffBands = [];
+  for (let h = startH; h < endH; h++) {
+    const rate = HOUR_TARIFF[h % 24];
+    const norm = (rate - 3.8) / (9.5 - 3.8);
+    tariffBands.push({ h, norm, x: ((h*60 - T_START) / T_RANGE) * 100, bw: (60/T_RANGE)*100 });
+  }
+  const ticks = [];
+  for (let h = startH; h <= endH; h += 2) {
+    const x = ((h*60 - T_START) / T_RANGE) * 100;
+    if (x >= 0 && x <= 100) ticks.push({ x, label: `${String(h%24).padStart(2,'0')}:00` });
+  }
+
+  const COLORS = { optimised: '#10b981', immediate: '#6366f1', urgent: '#f97316' };
+  const barColor = b => b.isUrgent ? COLORS.urgent : b.delayed ? COLORS.optimised : COLORS.immediate;
+
+  return (
+    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+      <p className="text-slate-600 text-xs font-semibold mb-2">{meta?.title || 'Charger Bay Timeline'}</p>
+      {/* Tariff sparkline */}
+      <div className="relative h-6 ml-10 mr-1 mb-1 bg-white rounded overflow-hidden border border-slate-100">
+        {tariffBands.map(b => (
+          <div key={b.h} className="absolute bottom-0 rounded-sm"
+            style={{ left: `${b.x}%`, width: `${Math.max(0.3, b.bw)}%`,
+              height: `${Math.max(8, b.norm * 100)}%`,
+              background: `hsl(${Math.round((1-b.norm)*120)},68%,44%)`, opacity: 0.82 }} />
+        ))}
+      </div>
+      {/* Charger rows */}
+      <div className="space-y-px">
+        {shown.map(ch => (
+          <div key={ch} className="flex items-center gap-1">
+            <span className="text-[9px] text-slate-500 w-9 text-right flex-shrink-0 font-medium">{ch}</span>
+            <div className="relative flex-1 h-5 bg-white border border-slate-100 rounded overflow-hidden">
+              {ticks.map(t => (
+                <div key={t.label} className="absolute top-0 bottom-0 w-px bg-slate-100" style={{ left: `${t.x}%` }} />
+              ))}
+              {(groups[ch] || []).map(bus => {
+                const cx = toX(bus.chargeStart);
+                const ex = toX(bus.chargeEnd);
+                const bw = Math.max(0.8, ex - cx);
+                return (
+                  <div key={bus.busId}
+                    className="absolute top-1 bottom-1 rounded-sm flex items-center justify-center overflow-hidden"
+                    style={{ left: `${cx}%`, width: `${bw}%`, background: barColor(bus), opacity: 0.85 }}>
+                    {bw > 5 && (
+                      <span className="text-white text-[7px] font-bold truncate px-0.5">
+                        {bus.busId.replace(/^Bus-0*/, 'B')}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      {/* Time axis */}
+      <div className="relative h-4 ml-10 mr-1 mt-0.5">
+        {ticks.map(t => (
+          <span key={t.label} className="absolute text-[9px] text-slate-400 -translate-x-1/2"
+            style={{ left: `${t.x}%` }}>{t.label}</span>
+        ))}
+      </div>
+      {chargers.length > 10 && (
+        <button onClick={() => setExpanded(p => !p)}
+          className="mt-1 text-[10px] text-indigo-500 hover:text-indigo-700 transition-colors">
+          {expanded ? 'Show less' : `Show all ${chargers.length} chargers`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function MiniStats({ meta }) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {(meta?.stats || []).map(s => (
+        <div key={s.label} className={cn('rounded-xl border px-3 py-2',
+          s.hi ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-200')}>
+          <p className={cn('text-sm font-bold', s.hi ? 'text-indigo-700' : 'text-slate-800')}>{s.value}</p>
+          <p className={cn('text-xs mt-0.5', s.hi ? 'text-indigo-500' : 'text-slate-400')}>{s.label}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MiniTable({ msg }) {
+  return (
+    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+      {msg.content && (
+        <div className="px-3 py-2 border-b border-slate-100 text-xs text-slate-500 font-medium">{msg.content}</div>
+      )}
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="bg-slate-50 border-b border-slate-200">
+            {(msg.meta?.headers || []).map(h => (
+              <th key={h} className="px-3 py-2 text-left text-slate-400 font-medium whitespace-nowrap">{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {(msg.meta?.rows || []).map((row, i) => (
+            <tr key={i} className="border-b border-slate-50 hover:bg-slate-50">
+              {row.map((cell, j) => (
+                <td key={j} className="px-3 py-1.5 text-slate-700 whitespace-nowrap">{cell}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Full Transcript Modal ─────────────────────────────────────────────────────
 function TranscriptModal({ session, onClose }) {
   const convo = session.conversation || [];
+
+  function renderMsg(msg, i) {
+    const isBot = msg.role === 'bot';
+
+    if (msg.type === 'stats') {
+      return (
+        <div key={i} className="space-y-1">
+          {msg.content && <p className="text-xs text-slate-500 pl-1">{msg.content}</p>}
+          <MiniStats meta={msg.meta} />
+        </div>
+      );
+    }
+    if (msg.type === 'gantt') return <MiniBusGantt key={i} meta={msg.meta} />;
+    if (msg.type === 'charger-gantt') return <MiniChargerGantt key={i} meta={msg.meta} />;
+    if (msg.type === 'table') return <MiniTable key={i} msg={msg} />;
+
+    return (
+      <div key={i} className={cn('flex gap-2', !isBot && 'flex-row-reverse')}>
+        <div className={cn(
+          'max-w-lg px-4 py-2.5 rounded-2xl text-xs leading-relaxed whitespace-pre-wrap',
+          isBot
+            ? 'bg-slate-50 border border-slate-200 text-slate-700 rounded-bl-sm'
+            : 'bg-indigo-600 text-white rounded-br-sm'
+        )}>
+          {String(msg.content)}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-4"
@@ -155,35 +375,10 @@ function TranscriptModal({ session, onClose }) {
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-3">
-          {convo.length === 0 ? (
-            <p className="text-slate-400 text-sm text-center py-8">No messages yet.</p>
-          ) : convo.map((msg, i) => {
-            const isBot = msg.role === 'bot';
-
-            if (msg.type !== 'text') {
-              return (
-                <div key={i} className="flex justify-start">
-                  <span className="text-xs text-slate-400 italic bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-                    {TYPE_LABEL[msg.type] || `[${msg.type}]`}
-                    {msg.meta?.title ? ` — ${msg.meta.title}` : ''}
-                  </span>
-                </div>
-              );
-            }
-
-            return (
-              <div key={i} className={cn('flex gap-2', !isBot && 'flex-row-reverse')}>
-                <div className={cn(
-                  'max-w-lg px-4 py-2.5 rounded-2xl text-xs leading-relaxed whitespace-pre-wrap',
-                  isBot
-                    ? 'bg-slate-50 border border-slate-200 text-slate-700 rounded-bl-sm'
-                    : 'bg-indigo-600 text-white rounded-br-sm'
-                )}>
-                  {String(msg.content)}
-                </div>
-              </div>
-            );
-          })}
+          {convo.length === 0
+            ? <p className="text-slate-400 text-sm text-center py-8">No messages yet.</p>
+            : convo.map(renderMsg)
+          }
         </div>
       </div>
     </div>
