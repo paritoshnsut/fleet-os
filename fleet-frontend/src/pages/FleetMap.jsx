@@ -25,7 +25,7 @@ const ROUTE_COLORS = {
 
 function createBusIcon(speed, fuelType, threshold = 65) {
   const color = speed > threshold ? '#ef4444' : speed > 50 ? '#f97316' : '#22c55e';
-  const symbol = fuelType === 'Electric' ? '⚡' : '⛽';
+  const symbol = fuelType === 'Electric' ? '⚡' : fuelType === 'CNG' ? '⛽' : '🛢';
   const pulse = speed > threshold
     ? `<div style="position:absolute;inset:-4px;border-radius:50%;
         background:${color}33;animation:ping 1s cubic-bezier(0,0,0.2,1) infinite;"></div>`
@@ -272,14 +272,15 @@ export default function FleetMap({ buses, alerts, demoActive = false, setDemoAct
   const activeBuses   = displayBuses.filter(b => !groundedIds.has(b.busId));
   const groundedBuses = displayBuses.filter(b => groundedIds.has(b.busId));
 
-  const filteredActive = activeBuses.filter(b =>
-    filterFuel === 'all' ? true :
-    filterFuel === 'ev'  ? b.fuelType === 'Electric' : b.fuelType === 'CNG'
-  );
-  const filteredGrounded = groundedBuses.filter(b =>
-    filterFuel === 'all' ? true :
-    filterFuel === 'ev'  ? b.fuelType === 'Electric' : b.fuelType === 'CNG'
-  );
+  function matchesFuelFilter(b) {
+    if (filterFuel === 'all')    return true;
+    if (filterFuel === 'ev')     return b.fuelType === 'Electric';
+    if (filterFuel === 'cng')    return b.fuelType === 'CNG';
+    if (filterFuel === 'diesel') return b.fuelType === 'Diesel';
+    return true;
+  }
+  const filteredActive   = activeBuses.filter(matchesFuelFilter);
+  const filteredGrounded = groundedBuses.filter(matchesFuelFilter);
 
   // Speed is only meaningful while demo is running — frozen snapshots carry stale values
   const avgSpeed  = demoActive && activeBuses.length ? Math.round(activeBuses.reduce((s, b) => s + b.speed, 0) / activeBuses.length) : 0;
@@ -402,7 +403,7 @@ export default function FleetMap({ buses, alerts, demoActive = false, setDemoAct
                           { label: 'Eng. Temp',  value: `${bus.engineTemp}°C`,
                             color: bus.engineTemp > 95 ? '#dc2626' : '#0f172a' },
                           { label: bus.fuelType === 'Electric' ? 'SOC' : 'Fuel',
-                            value: bus.soc != null ? `${Math.round(bus.soc)}%` : 'CNG',
+                            value: bus.fuelType === 'Electric' && bus.soc != null ? `${Math.round(bus.soc)}%` : bus.fuelType,
                             color: bus.soc != null && bus.soc < 25 ? '#dc2626' : '#0f172a' },
                         ].map(({ label, value, color }) => (
                           <div key={label} style={{
@@ -471,15 +472,20 @@ export default function FleetMap({ buses, alerts, demoActive = false, setDemoAct
               )}>
               Route Lines
             </button>
-            {['all', 'ev', 'cng'].map(f => (
-              <button key={f} onClick={() => setFilterFuel(f)}
+            {[
+              { id: 'all',    label: 'All'     },
+              { id: 'ev',     label: '⚡ EV'   },
+              { id: 'cng',    label: '⛽ CNG'  },
+              { id: 'diesel', label: '🛢 Diesel' },
+            ].map(f => (
+              <button key={f.id} onClick={() => setFilterFuel(f.id)}
                 className={cn(
                   'px-3 py-1.5 rounded-lg text-xs font-medium border transition-all shadow-sm',
-                  filterFuel === f
+                  filterFuel === f.id
                     ? 'bg-blue-50 border-blue-200 text-blue-700'
                     : 'bg-white border-slate-200 text-slate-500 hover:text-slate-700'
                 )}>
-                {f === 'all' ? 'All' : f === 'ev' ? '⚡ EV' : '🔵 CNG'}
+                {f.label}
               </button>
             ))}
           </div>

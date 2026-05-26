@@ -178,12 +178,13 @@ function BusesTab({ operatorId, onCountChange, onFleetChanged }) {
                 value={form.fuel_type}
                 onChange={e => setForm(p => ({
                   ...p,
-                  fuel_type: e.target.value,
-                  battery_type: e.target.value === 'CNG' ? null : '3 Batt',
+                  fuel_type:    e.target.value,
+                  battery_type: e.target.value === 'Electric' ? '3 Batt' : null,
                 }))}
               >
                 <option value="Electric">Electric</option>
                 <option value="CNG">CNG</option>
+                <option value="Diesel">Diesel</option>
               </Select>
             </Field>
             {form.fuel_type === 'Electric' && (
@@ -243,9 +244,9 @@ function BusesTab({ operatorId, onCountChange, onFleetChanged }) {
                   <td className="px-4 py-3">
                     <span className={cn(
                       'flex items-center gap-1 w-fit px-2 py-0.5 rounded-full text-xs border',
-                      bus.fuel_type === 'Electric'
-                        ? 'bg-blue-50 border-blue-200 text-blue-600'
-                        : 'bg-orange-50 border-orange-200 text-orange-600'
+                      bus.fuel_type === 'Electric' ? 'bg-blue-50 border-blue-200 text-blue-600'   :
+                      bus.fuel_type === 'CNG'      ? 'bg-orange-50 border-orange-200 text-orange-600' :
+                                                     'bg-slate-100 border-slate-300 text-slate-600'
                     )}>
                       {bus.fuel_type === 'Electric' ? <Zap size={10} /> : <Fuel size={10} />}
                       {bus.fuel_type}

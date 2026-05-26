@@ -5,7 +5,8 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
 const SEED_BUSES = [
   { bus_number: 'MH12-AB-1234', license_plate: 'MH12AB1234', seats: 36, fuel_type: 'Electric', battery_type: '4 Batt' },
   { bus_number: 'MH12-CD-5678', license_plate: 'MH12CD5678', seats: 36, fuel_type: 'Electric', battery_type: '3 Batt' },
-  { bus_number: 'MH12-EF-9012', license_plate: 'MH12EF9012', seats: 36, fuel_type: 'CNG',      battery_type: null      },
+  { bus_number: 'MH12-EF-9012', license_plate: 'MH12EF9012', seats: 36, fuel_type: 'CNG',      battery_type: null     },
+  { bus_number: 'MH12-GH-3456', license_plate: 'MH12GH3456', seats: 36, fuel_type: 'Diesel',   battery_type: null     },
 ];
 
 const SEED_DRIVERS = [
