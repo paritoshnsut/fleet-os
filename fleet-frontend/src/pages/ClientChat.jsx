@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../lib/supabase';
-import { Send, FileSpreadsheet, X, Bot, Download, CheckCircle } from 'lucide-react';
+import { Send, FileSpreadsheet, X, Bot, Download, CheckCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '../lib/utils';
+
+const OPTIMIZER_URL = import.meta.env.VITE_OPTIMIZER_URL ?? 'http://localhost:8000';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -389,71 +391,95 @@ function exportExcel(clientName, results, messages) {
 }
 
 // ── Chat UI components ────────────────────────────────────────────────────────
-function GanttChart({ msg }) {
-  const { title, legend, timeStartMin, timeEndMin, rows } = msg.meta;
-  const ROW_H = 22, LABEL_W = 62, PAD = 10, HEADER = 26;
-  const W = 580, chartW = W - LABEL_W - PAD;
-  const H = HEADER + rows.length * ROW_H + PAD;
-  const range = Math.max(1, timeEndMin - timeStartMin);
+const TRIP_COLORS = { pickup: '#3b82f6', drop: '#10b981', both: '#8b5cf6', mixed: '#8b5cf6' };
 
-  function tx(min) { return LABEL_W + (min - timeStartMin) / range * chartW; }
-
-  const ticks = [];
-  for (let m = Math.ceil(timeStartMin / 120) * 120; m <= timeEndMin; m += 120) ticks.push(m);
+function BusGantt({ msg }) {
+  const [expanded, setExpanded] = useState(false);
+  const buses = msg.meta?.buses || [];
+  const shown = expanded ? buses : buses.slice(0, 15);
+  // time axis: 05:00 (300 min) → 23:00 (1380 min)
+  const START = 300, END = 1380;
+  const toX = min => Math.max(0, Math.min(100, ((min - START) / (END - START)) * 100));
+  const hours = Array.from({ length: 19 }, (_, i) => 5 + i);   // 05..23
 
   return (
     <div className="flex gap-2 items-start">
       <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center flex-shrink-0 mt-1">
         <Bot size={14} className="text-white" />
       </div>
-      <div className="max-w-2xl overflow-hidden rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm shadow-sm">
-        {title && (
-          <div className="px-4 py-2.5 border-b border-white/10">
-            <p className="text-slate-300 text-xs font-medium">{title}</p>
+      <div className="flex-1 bg-white border border-slate-200 rounded-2xl p-4 shadow-sm overflow-hidden">
+        {/* header */}
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <div>
+            <p className="text-slate-700 text-sm font-semibold">{msg.meta?.title || 'Bus Schedule Gantt'}</p>
+            <p className="text-slate-400 text-xs mt-0.5">Each row = one bus · bars = trip legs</p>
           </div>
-        )}
-        <div className="overflow-x-auto p-2">
-          <svg width={W} height={H} style={{ display: 'block' }}>
-            {ticks.map(m => {
-              const x = tx(m);
-              const h = Math.floor((m % 1440) / 60);
-              const label = String(h).padStart(2,'0') + ':00' + (m >= 1440 ? '†' : '');
-              return (
-                <g key={m}>
-                  <line x1={x} y1={HEADER - 4} x2={x} y2={H - 4} stroke="rgba(255,255,255,0.08)" strokeWidth={1}/>
-                  <text x={x} y={HEADER - 9} textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize={9}>{label}</text>
-                </g>
-              );
-            })}
-            {rows.map((row, i) => {
-              const y = HEADER + i * ROW_H;
-              return (
-                <g key={i}>
-                  <text x={LABEL_W - 4} y={y + ROW_H * 0.65} textAnchor="end"
-                    fill="rgba(255,255,255,0.4)" fontSize={9}>{row.label}</text>
-                  <rect x={LABEL_W} y={y + 2} width={chartW} height={ROW_H - 4}
-                    fill={i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent'} rx={2}/>
-                  {row.bars.map((bar, j) => {
-                    const x1 = tx(bar.startMin), x2 = tx(bar.endMin);
-                    return (
-                      <rect key={j} x={x1} y={y + 4} width={Math.max(2, x2 - x1)} height={ROW_H - 8}
-                        fill={bar.color || 'rgba(99,102,241,0.75)'} rx={2} opacity={0.85}/>
-                    );
-                  })}
-                </g>
-              );
-            })}
-          </svg>
-        </div>
-        {legend && legend.length > 0 && (
-          <div className="px-4 py-2.5 border-t border-white/10 flex gap-4 flex-wrap">
-            {legend.map(l => (
-              <div key={l.label} className="flex items-center gap-1.5">
-                <div className="w-3 h-3 rounded" style={{ background: l.color }}/>
-                <span className="text-slate-400 text-xs">{l.label}</span>
+          <div className="flex items-center gap-3 text-xs flex-wrap">
+            {[['Pickup','#3b82f6'],['Drop','#10b981'],['Both-way','#8b5cf6'],['Charging','#f59e0b']].map(([l,c]) => (
+              <div key={l} className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded-sm" style={{ background: c }}/>
+                <span className="text-slate-500">{l}</span>
               </div>
             ))}
           </div>
+        </div>
+
+        {/* time axis */}
+        <div className="relative h-5 mb-1 ml-16 mr-16">
+          {hours.filter(h => h % 2 === 0).map(h => (
+            <span key={h} className="absolute text-xs text-slate-400 -translate-x-1/2 select-none"
+              style={{ left: `${toX(h * 60)}%` }}>
+              {String(h).padStart(2,'0')}:00
+            </span>
+          ))}
+        </div>
+
+        {/* rows */}
+        <div className="space-y-px overflow-y-auto" style={{ maxHeight: expanded ? '640px' : '340px' }}>
+          {shown.map(bus => (
+            <div key={bus.bus_id} className="flex items-center gap-2">
+              <span className="text-xs text-slate-400 w-14 text-right flex-shrink-0 tabular-nums">
+                Bus {bus.bus_id}
+              </span>
+              <div className="relative flex-1 h-5 bg-slate-100 rounded overflow-hidden">
+                {hours.map(h => (
+                  <div key={h} className="absolute top-0 bottom-0 w-px bg-slate-200"
+                    style={{ left: `${toX(h * 60)}%` }} />
+                ))}
+                {(bus.legs || []).map((leg, i) => {
+                  const x  = toX(leg.start_min);
+                  const w  = Math.max(0.4, toX(leg.end_min) - x);
+                  const cx = leg.charge_start != null ? toX(leg.charge_start) : null;
+                  const cw = cx != null ? Math.max(0.3, toX(leg.charge_end) - cx) : 0;
+                  return (
+                    <div key={i}>
+                      <div className="absolute h-full rounded-sm opacity-90"
+                        style={{ left:`${x}%`, width:`${w}%`, background: TRIP_COLORS[leg.trip_type] ?? '#94a3b8' }}
+                        title={`${leg.route_name ?? ''} · ${leg.start_time ?? ''}–${leg.end_time ?? ''}`} />
+                      {cx != null && (
+                        <div className="absolute h-full rounded-sm opacity-75"
+                          style={{ left:`${cx}%`, width:`${cw}%`, background:'#f59e0b' }}
+                          title={`Charging ${leg.charge_start_time ?? ''}–${leg.charge_end_time ?? ''}`} />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <span className="text-xs text-slate-400 w-14 flex-shrink-0 tabular-nums">
+                {bus.run_km ?? ''}{bus.run_km != null ? ' km' : ''}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {buses.length > 15 && (
+          <button onClick={() => setExpanded(p => !p)}
+            className="mt-3 w-full flex items-center justify-center gap-1.5 text-xs text-slate-400
+              hover:text-slate-600 transition-colors py-1.5 border border-slate-200 rounded-lg">
+            {expanded
+              ? <><ChevronUp size={12}/> Show fewer</>
+              : <><ChevronDown size={12}/> Show all {buses.length} buses</>}
+          </button>
         )}
       </div>
     </div>
@@ -486,15 +512,15 @@ function ChatBubble({ msg }) {
           <Bot size={14} className="text-white" />
         </div>
         <div className="max-w-lg">
-          {msg.content && <p className="text-slate-200 text-sm mb-3 px-1">{msg.content}</p>}
+          {msg.content && <p className="text-slate-600 text-sm mb-3 px-1">{msg.content}</p>}
           <div className="grid grid-cols-2 gap-2">
             {msg.meta?.stats?.map(s => (
               <div key={s.label} className={cn(
                 'rounded-xl border p-3',
-                s.hi ? 'bg-indigo-500/20 border-indigo-400/40' : 'bg-white/10 border-white/10'
+                s.hi ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-200'
               )}>
-                <p className={cn('text-lg font-bold', s.hi ? 'text-indigo-200' : 'text-white')}>{s.value}</p>
-                <p className={cn('text-xs mt-0.5', s.hi ? 'text-indigo-300' : 'text-slate-400')}>{s.label}</p>
+                <p className={cn('text-lg font-bold', s.hi ? 'text-indigo-700' : 'text-slate-800')}>{s.value}</p>
+                <p className={cn('text-xs mt-0.5', s.hi ? 'text-indigo-500' : 'text-slate-400')}>{s.label}</p>
               </div>
             ))}
           </div>
@@ -503,7 +529,7 @@ function ChatBubble({ msg }) {
     );
   }
 
-  if (msg.type === 'gantt') return <GanttChart msg={msg} />;
+  if (msg.type === 'gantt') return <BusGantt msg={msg} />;
 
   if (msg.type === 'table') {
     return (
@@ -511,26 +537,26 @@ function ChatBubble({ msg }) {
         <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center flex-shrink-0 self-start mt-1">
           <Bot size={14} className="text-white" />
         </div>
-        <div className="max-w-2xl overflow-hidden rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm shadow-sm">
+        <div className="max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           {msg.content && (
-            <div className="px-4 py-2.5 border-b border-white/10">
-              <p className="text-slate-300 text-xs font-medium">{msg.content}</p>
+            <div className="px-4 py-2.5 border-b border-slate-100">
+              <p className="text-slate-600 text-xs font-medium">{msg.content}</p>
             </div>
           )}
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-white/10">
+                <tr className="border-b border-slate-100 bg-slate-50">
                   {msg.meta?.headers?.map(h => (
-                    <th key={h} className="px-3 py-2.5 text-left text-slate-400 font-medium uppercase tracking-wide whitespace-nowrap">{h}</th>
+                    <th key={h} className="px-3 py-2.5 text-left text-slate-500 font-medium uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {msg.meta?.rows?.map((row, i) => (
-                  <tr key={i} className="border-b border-white/5">
+                  <tr key={i} className="border-b border-slate-50 hover:bg-slate-50">
                     {row.map((cell, j) => (
-                      <td key={j} className="px-3 py-2 text-slate-200 whitespace-nowrap">{cell}</td>
+                      <td key={j} className="px-3 py-2 text-slate-700 whitespace-nowrap">{cell}</td>
                     ))}
                   </tr>
                 ))}
@@ -552,8 +578,8 @@ function ChatBubble({ msg }) {
       <div className={cn(
         'max-w-lg px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm',
         isBot
-          ? 'bg-white/10 backdrop-blur-sm border border-white/10 text-slate-100 rounded-bl-sm'
-          : 'bg-indigo-500 text-white rounded-br-sm'
+          ? 'bg-white border border-slate-200 text-slate-700 rounded-bl-sm'
+          : 'bg-indigo-600 text-white rounded-br-sm'
       )}>
         {String(msg.content).split('\n').map((line, i, arr) => (
           <span key={i}>{line}{i < arr.length - 1 && <br />}</span>
@@ -571,8 +597,8 @@ function ChoiceChips({ choices, onChoose, consumed }) {
           className={cn(
             'px-4 py-2 rounded-xl border text-sm font-medium transition-all',
             consumed
-              ? 'opacity-30 cursor-not-allowed border-white/10 text-white/50 bg-transparent'
-              : 'border-indigo-400/50 text-indigo-200 bg-indigo-500/20 hover:bg-indigo-500/40 hover:border-indigo-300 cursor-pointer'
+              ? 'opacity-40 cursor-not-allowed border-slate-200 text-slate-400 bg-white'
+              : 'border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 hover:border-indigo-300 cursor-pointer shadow-sm'
           )}>
           {c.label}
         </button>
@@ -595,9 +621,9 @@ function FileDropZone({ onFile, consumed }) {
     <div
       className={cn(
         'ml-10 border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all',
-        consumed ? 'opacity-30 cursor-not-allowed border-white/10' :
-        drag     ? 'border-indigo-400 bg-indigo-500/20'
-                 : 'border-white/20 hover:border-indigo-400/60 hover:bg-white/5'
+        consumed ? 'opacity-40 cursor-not-allowed border-slate-200 bg-slate-50' :
+        drag     ? 'border-indigo-400 bg-indigo-50'
+                 : 'border-slate-300 bg-white hover:border-indigo-300 hover:bg-indigo-50/50'
       )}
       onClick={() => !consumed && ref.current?.click()}
       onDragOver={e => { e.preventDefault(); setDrag(true); }}
@@ -605,7 +631,7 @@ function FileDropZone({ onFile, consumed }) {
       onDrop={e => { e.preventDefault(); setDrag(false); handle(e.dataTransfer.files[0]); }}
     >
       <FileSpreadsheet size={28} className="mx-auto mb-2 text-indigo-400" />
-      <p className="text-slate-200 text-sm font-medium">Drop your Excel here, or click to browse</p>
+      <p className="text-slate-700 text-sm font-medium">Drop your Excel here, or click to browse</p>
       <p className="text-slate-400 text-xs mt-1">Supports: TCS Adibatla format · Alternate fuel TCO · any route schedule Excel</p>
       <input ref={ref} type="file" accept=".xlsx,.xls,.xlsm,.csv" className="hidden"
         onChange={e => handle(e.target.files?.[0])} />
@@ -635,6 +661,7 @@ export default function ClientChat({ token }) {
   const fleetRef    = useRef(null);       // { trips, totalKm, routes, pickups, drops }
   const resultsRef  = useRef({});         // { trip, charge, tco }
   const sessionRef  = useRef(null);
+  const rawFileRef  = useRef(null);       // raw File object for optimizer API
   const started     = useRef(false);
 
   // Validate token
@@ -760,81 +787,113 @@ export default function ClientChat({ token }) {
 
   // ── Trip Planning ─────────────────────────────────────────────────────────
   async function doTrip() {
-    await bot('Great — trip planning it is.\n\nHow many buses do you currently have available in your fleet? (Enter a number, or type "0" to just find the minimum)');
-    const text = await waitText();
-    const maxB = parseInt(text) || 999;
+    await bot('Great — let\'s plan your fleet.\n\nWhich scheduling algorithm would you like to use?');
+    const algoChoice = await waitChoice([
+      { id: 'greedy',  label: '⚡ Smart Greedy' },
+      { id: 'pairing', label: '🔗 Pairing Heuristic' },
+      { id: 'ortools', label: '🎯 OR-Tools CP-SAT (optimal)' },
+    ]);
+    const ALGO_LABELS = { greedy: 'Smart Greedy', pairing: 'Pairing Heuristic', ortools: 'OR-Tools CP-SAT' };
+    const algoLabel = ALGO_LABELS[algoChoice.id];
+
+    const ALGO_EXPLAIN = {
+      greedy:  'Sorts trips by departure time, assigns each to the first available bus with ≥15 min turnaround. Fast — runs in milliseconds and typically within 5–10% of optimal.',
+      pairing: 'Matches morning pickups with evening drops on the same corridor, locks them to one bus, then fills remaining gaps with a greedy pass. Closest to how an experienced transport manager plans manually.',
+      ortools: 'Models the schedule as a Vehicle Routing Problem with Time Windows (VRPTW) and uses Google\'s OR-Tools CP-SAT constraint solver — same engine used by Google Maps and FedEx — to find the provably minimum fleet size. Budget: 30 seconds.',
+    };
+    await bot(ALGO_EXPLAIN[algoChoice.id]);
+    await bot(`Running ${algoLabel} on your ${fleetRef.current.trips.length} trips…`);
+    await delay(algoChoice.id === 'ortools' ? 2000 : 1000);
+
+    let ganttBuses = null;
+    let busCount = 0;
+    let utilization = 0;
+    let totalKm = fleetRef.current.totalKm;
+    let comparison = null;
+
+    try {
+      if (!rawFileRef.current) throw new Error('no file');
+      const fd = new FormData();
+      fd.append('file', rawFileRef.current);
+      fd.append('benchmark_buses', String(fleetRef.current.trips.length));
+      const res = await fetch(`${OPTIMIZER_URL}/optimize`, { method: 'POST', body: fd });
+      if (!res.ok) throw new Error('API error');
+      const data = await res.json();
+      const algo = data[algoChoice.id];
+
+      busCount    = algo.bus_count;
+      utilization = algo.utilization ?? 0;
+      totalKm     = algo.total_run_km ?? totalKm;
+      ganttBuses  = algo.buses;
+      comparison  = data.comparison;
+
+      // store for charging step (adapter to internal format)
+      resultsRef.current = {
+        ...resultsRef.current,
+        trip: {
+          busCount,
+          buses: algo.buses.map(b => ({
+            id:     b.bus_id,
+            freeAt: b.legs.length ? b.legs[b.legs.length - 1].end_min : 0,
+            legs:   b.legs.map(l => ({
+              routeName: l.route_name, tripType: l.trip_type,
+              outTime: l.start_time,  inTime: l.end_time, km: 0, seats: 36,
+            })),
+          })),
+          totalTrips: fleetRef.current.trips.length,
+          totalKm, utilization,
+          savedBuses: fleetRef.current.trips.length - busCount,
+        },
+      };
+    } catch {
+      // Fallback: client-side bipartite matching
+      await bot('(Optimizer server not reachable — using built-in solver instead.)');
+      const r = runOptimalSchedule(fleetRef.current.trips, 0);
+      busCount    = r.busCount;
+      utilization = r.utilization;
+      totalKm     = r.totalKm;
+      resultsRef.current = { ...resultsRef.current, trip: r };
+      ganttBuses = r.buses.map(b => ({
+        bus_id: b.id,
+        run_km: b.legs.reduce((s, l) => s + (l.km || 0), 0),
+        legs: b.legs.map(l => ({
+          route_name: l.routeName, trip_type: l.tripType,
+          start_min: timeToMin(l.outTime), end_min: timeToMin(l.inTime),
+          start_time: l.outTime, end_time: l.inTime,
+          charge_start: null, charge_end: null,
+        })),
+      }));
+    }
 
     await bot(
-      `Here's how the optimiser works:\n\n` +
-      `1. Each trip is a time window — [depot departure → depot return]\n` +
-      `2. We build a compatibility graph: can bus finish trip A in time to start trip B? (with 15-min turnaround)\n` +
-      `3. Maximum bipartite matching on that graph finds the largest set of A→B pairings — each pairing means one less bus\n` +
-      `4. Minimum buses = total trips − maximum pairings (this is provably optimal via Dilworth's theorem)\n\n` +
-      `Running over all ${fleetRef.current.trips.length} trips now…`
-    );
-    await delay(2400);
-
-    const result = runOptimalSchedule(fleetRef.current.trips, maxB === 999 ? 0 : maxB);
-    resultsRef.current = { ...resultsRef.current, trip: result };
-
-    // Explain what the result means
-    const bothCount   = result.buses.filter(b => b.legs.some(l => l.tripType === 'both')).length;
-    const sharedCount = result.buses.filter(b => b.legs.length > 1).length;
-    const soloCount   = result.busCount - sharedCount;
-
-    await bot(
-      `Minimum fleet size confirmed: ${result.busCount} buses.\n\n` +
-      `• ${bothCount} buses are dedicated full-day (both-way routes — they can't be reassigned mid-day)\n` +
-      `• ${sharedCount} buses each cover 2+ trips in a day (the scheduler chained them)\n` +
-      `• ${soloCount} buses run a single trip with no pairing opportunity\n\n` +
-      `Fleet utilisation is ${result.utilization}% — the remaining time is turnaround/rest at depot.`
+      `${algoLabel} complete.\n\n` +
+      `${busCount} buses cover all ${fleetRef.current.trips.length} trips with ${utilization}% average utilisation. ` +
+      `The remaining time per bus is depot turnaround, driver breaks, and standby.`
     );
 
-    await bot('Optimised schedule summary:', 'stats', { stats: [
-      { label: 'Minimum buses needed', value: result.busCount,          hi: true },
-      { label: 'Buses available',      value: maxB === 999 ? '—' : maxB          },
-      { label: 'Fleet utilisation',    value: `${result.utilization}%`, hi: true },
-      { label: 'Total daily km',       value: `${fmt(result.totalKm)} km`         },
+    await bot('Schedule summary:', 'stats', { stats: [
+      { label: 'Buses needed',      value: busCount,          hi: true },
+      { label: 'Total daily km',    value: `${fmt(totalKm)} km`        },
+      { label: 'Fleet utilisation', value: `${utilization}%`, hi: true },
+      { label: 'Trips covered',     value: fleetRef.current.trips.length },
     ]});
 
-    // Gantt chart — first 30 buses
-    const ganttLimit = Math.min(result.buses.length, 30);
-    const ganttRows  = result.buses.slice(0, ganttLimit).map(bus => ({
-      label: `B${bus.id}`,
-      bars:  bus.legs.map(leg => ({
-        startMin: timeToMin(leg.outTime),
-        endMin:   timeToMin(leg.inTime),
-        color: leg.tripType === 'both'   ? 'rgba(139,92,246,0.8)' :
-               leg.tripType === 'pickup' ? 'rgba(59,130,246,0.8)' :
-                                           'rgba(16,185,129,0.8)',
-      })),
-    }));
-    const allMins = result.buses.flatMap(b => b.legs.flatMap(l => [timeToMin(l.outTime), timeToMin(l.inTime)]));
+    // Gantt — all buses, expand/collapse
     addMsg({ id: Date.now() + Math.random(), role: 'bot', type: 'gantt', content: null, meta: {
-      title: `Bus Schedule Gantt — first ${ganttLimit} of ${result.busCount} buses (each row = 1 bus, bars = trip legs)`,
-      timeStartMin: Math.min(...allMins),
-      timeEndMin:   Math.max(...allMins),
-      rows: ganttRows,
-      legend: [
-        { label: 'Both-way (dedicated)', color: 'rgba(139,92,246,0.8)' },
-        { label: 'Pickup',               color: 'rgba(59,130,246,0.8)' },
-        { label: 'Drop',                 color: 'rgba(16,185,129,0.8)' },
-      ],
+      title: `Bus Schedule Gantt — ${algoLabel} · ${busCount} buses`,
+      buses: ganttBuses,
     }});
 
-    await bot('Per-bus breakdown:', 'table', {
-      headers: ['Bus', 'Trips', 'First Out', 'Last In', 'Daily km'],
-      rows: result.buses.map(b => [
-        `Bus ${b.id}`,
-        `${b.legs.length} trip${b.legs.length !== 1 ? 's' : ''}`,
-        b.legs[0]?.outTime ?? '—',
-        b.legs[b.legs.length - 1]?.inTime ?? '—',
-        `${b.legs.reduce((s, l) => s + (l.km || 0), 0)} km`,
-      ]),
-    });
-
-    if (result.savedBuses > 0 && maxB !== 999) {
-      await bot(`You can cover all ${result.totalTrips} trips with just ${result.busCount} buses — that's ${result.savedBuses} fewer than your current fleet. At ~₹75 lakh per bus, that's ₹${result.savedBuses * 75}L in potential fleet cost reduction.`);
+    // Algorithm comparison table if available
+    if (comparison) {
+      await bot('All algorithms compared:', 'table', {
+        headers: ['Algorithm', 'Buses', 'Daily km', 'Utilisation'],
+        rows: [
+          ['Smart Greedy',    comparison.greedy?.bus_count,  `${comparison.greedy?.total_run_km} km`,  `${comparison.greedy?.utilization}%`],
+          ['Pairing Heuristic',comparison.pairing?.bus_count,`${comparison.pairing?.total_run_km} km`, `${comparison.pairing?.utilization}%`],
+          ['OR-Tools CP-SAT', comparison.ortools?.bus_count, `${comparison.ortools?.total_run_km} km`, `${comparison.ortools?.utilization}%`],
+        ],
+      });
     }
   }
 
@@ -1069,23 +1128,15 @@ export default function ClientChat({ token }) {
   async function handleFile(file) {
     setUploadDone(true);
     setShowUpload(false);
+    rawFileRef.current = file;                // store for optimizer API calls
     addMsg({ id: Date.now(), role: 'user', content: `📎 ${file.name}`, type: 'text' });
     setTyping(true);
     try {
       const fleet = await parseFleetExcel(file);
       setTyping(false);
-      if (fleet.isTCOFile) {
-        // Alternate fuel / TCO Excel detected — skip to TCO flow directly
-        fleetRef.current = fleet;
-        const fn = pendingRef.current;
-        pendingRef.current = null;
-        // Pass a synthetic "TCO file" fleet so runFlow takes the right branch
-        fn(fleet);
-      } else {
-        const fn = pendingRef.current;
-        pendingRef.current = null;
-        fn(fleet);
-      }
+      const fn = pendingRef.current;
+      pendingRef.current = null;
+      fn(fleet);
     } catch (err) {
       setTyping(false);
       addMsg({ id: Date.now(), role: 'bot', content: `I couldn't read that file. ${err.message}`, type: 'text' });
@@ -1135,14 +1186,14 @@ export default function ClientChat({ token }) {
 
   // ── Render ────────────────────────────────────────────────────────────────
   if (validating) return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 flex items-center justify-center">
-      <p className="text-white/60 text-sm animate-pulse">Verifying your session…</p>
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+      <p className="text-slate-400 text-sm animate-pulse">Verifying your session…</p>
     </div>
   );
 
   if (invalid) return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 to-indigo-950 flex items-center justify-center p-6">
-      <div className="bg-white rounded-2xl p-8 max-w-sm w-full text-center shadow-2xl">
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+      <div className="bg-white rounded-2xl p-8 max-w-sm w-full text-center shadow-xl border border-slate-200">
         <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-4">
           <X size={20} className="text-red-500" />
         </div>
@@ -1153,21 +1204,19 @@ export default function ClientChat({ token }) {
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 flex flex-col">
+    <div className="min-h-screen bg-slate-50 flex flex-col">
       {/* Header */}
-      <header className="flex items-center justify-between px-6 py-4 border-b border-white/10 flex-shrink-0">
+      <header className="flex items-center justify-between px-6 py-3.5 border-b border-slate-200 bg-white flex-shrink-0 shadow-sm">
         <div className="flex items-center gap-3">
-          <div className="bg-white rounded-lg px-2 py-1 flex-shrink-0">
-            <img src="/tata-logo.svg" alt="Tata Motors" className="h-7 w-auto" />
-          </div>
+          <img src="/tata-logo.svg" alt="Tata Motors" className="h-8 w-auto" />
           <div>
-            <p className="text-white font-bold text-sm">FleetOS Analyst</p>
-            <p className="text-indigo-300 text-xs">Tata Motors CV · Intelligent Fleet Planning</p>
+            <p className="text-slate-800 font-bold text-sm">FleetOS Analyst</p>
+            <p className="text-slate-400 text-xs">Tata Motors CV · Intelligent Fleet Planning</p>
           </div>
         </div>
         {session?.client_name && (
-          <div className="bg-white/10 px-3 py-1.5 rounded-full">
-            <p className="text-white/80 text-xs">{session.client_name}</p>
+          <div className="bg-slate-100 px-3 py-1.5 rounded-full">
+            <p className="text-slate-600 text-xs font-medium">{session.client_name}</p>
           </div>
         )}
       </header>
@@ -1189,15 +1238,15 @@ export default function ClientChat({ token }) {
       </div>
 
       {/* Input bar */}
-      <div className="border-t border-white/10 px-6 py-4 max-w-3xl w-full mx-auto flex-shrink-0">
+      <div className="border-t border-slate-200 bg-white px-6 py-4 max-w-3xl w-full mx-auto flex-shrink-0">
         <div className={cn(
-          'flex items-center gap-3 rounded-2xl px-4 py-3 transition-all',
+          'flex items-center gap-3 rounded-2xl border px-4 py-3 transition-all',
           inputOn
-            ? 'bg-white/10 ring-2 ring-indigo-400/50'
-            : 'bg-white/5 opacity-60'
+            ? 'bg-white border-indigo-300 ring-2 ring-indigo-100'
+            : 'bg-slate-50 border-slate-200 opacity-60'
         )}>
           <input
-            className="flex-1 bg-transparent text-white placeholder-white/30 text-sm outline-none"
+            className="flex-1 bg-transparent text-slate-800 placeholder-slate-400 text-sm outline-none"
             placeholder={inputOn ? 'Type your answer and press Enter…' : 'Choose an option above…'}
             value={inputText}
             disabled={!inputOn}
