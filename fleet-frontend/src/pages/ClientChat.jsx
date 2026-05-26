@@ -822,7 +822,7 @@ export default function ClientChat({ token }) {
       const algo = data[algoChoice.id];
 
       busCount    = algo.bus_count;
-      utilization = algo.utilization ?? 0;
+      utilization = algo.avg_utilization_pct ?? algo.utilization ?? 0;
       totalKm     = algo.total_run_km ?? totalKm;
       ganttBuses  = algo.buses;
       comparison  = data.comparison;
