@@ -1,114 +1,134 @@
 import { useState, useMemo } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  LineChart, Line, ResponsiveContainer, Legend, ReferenceLine, Cell,
+  LineChart, Line, ResponsiveContainer, Legend, ReferenceLine,
 } from 'recharts';
 import {
   SlidersHorizontal, Zap, Leaf, TrendingDown, Info, RotateCcw, X,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-// ── Constants — all sourced from public Indian datasets ───────────────────────
+// ── Default assumptions — all editable at runtime via the ⓘ modal ─────────────
 
-const DIESEL_PRICE    = 92;     // ₹/L   — IOC pump price, Mumbai/Pune
-const CNG_PRICE       = 76;     // ₹/kg  — MGL retail
-const EV_TARIFF       = 4.5;    // ₹/kWh — weighted avg overnight tariff
-const DIESEL_EFF      = 4.0;    // km/L  — 12m city bus, CIRT Pune
-const CNG_EFF         = 3.5;    // km/kg — ICAT benchmark
-const EV_KWH_PER_KM  = 1.5;    // kWh/km — FAME II certified
-const ASSET_LIFE      = 8;      // years
+const DEFAULT_A = {
+  // Fuel prices
+  dieselPrice:    92,       // ₹/L   — IOC pump, Mumbai/Pune
+  cngPrice:       76,       // ₹/kg  — MGL retail
+  evTariff:       4.5,      // ₹/kWh — MSEDCL ToU weighted avg overnight
 
-const PURCHASE = { diesel: 3_500_000, cng: 4_500_000, ev: 15_000_000 }; // ₹
-const BATTERY_REPLACE = 5_000_000; // ₹50L at year 6, amortized over asset life
-const FAME_RATE       = 0.40;      // 40% off EV price — MHI notification
+  // Fuel efficiency
+  dieselEff:      4.0,      // km/L  — CIRT Pune, 12m city bus
+  cngEff:         3.5,      // km/kg — ICAT benchmark
+  evKwh:          1.5,      // kWh/km — FAME II certified
 
-// ₹/bus/year — UITP / operator survey data
-const MAINTENANCE = { diesel: 350_000, cng: 280_000, ev: 120_000 };
-const INSURANCE   = { diesel: 100_000, cng: 100_000, ev: 110_000 };
+  // Vehicle purchase (₹)
+  purchaseDiesel: 3_500_000,  // ₹35 L
+  purchaseCNG:    4_500_000,  // ₹45 L
+  purchaseEV:    15_000_000,  // ₹1.5 Cr — Tata Starbus EV
 
-// kg CO₂/km — MoRTH / CPCB
-const CO2_PER_KM = { diesel: 0.850, cng: 0.650 };
-// kg CO₂/kWh — CEA Annual Report (2027/2030 = projected)
-const GRID_FACTOR = { 2025: 0.70, 2027: 0.58, 2030: 0.40 };
+  // EV economics
+  fameRate:       40,         // % off EV price — MHI notification
+  batteryReplace: 5_000_000,  // ₹50 L at year 6 — 300 kWh pack
+  assetLife:      8,          // years
 
-// ── Core calculations ─────────────────────────────────────────────────────────
+  // Maintenance ₹/bus/yr
+  maintDiesel:    350_000,
+  maintCNG:       280_000,
+  maintEV:        120_000,
 
-function annualFuelCost(type, kmPA) {
-  if (type === 'diesel') return (kmPA / DIESEL_EFF) * DIESEL_PRICE;
-  if (type === 'cng')    return (kmPA / CNG_EFF)    * CNG_PRICE;
-  return kmPA * EV_KWH_PER_KM * EV_TARIFF;
+  // Insurance ₹/bus/yr
+  insDiesel:      100_000,
+  insCNG:         100_000,
+  insEV:          110_000,
+
+  // CO₂ emission factors
+  co2Diesel:      0.850,  // kg CO₂/km — MoRTH / CPCB
+  co2CNG:         0.650,  // kg CO₂/km — CPCB (24% below diesel)
+  grid2025:       0.70,   // kg CO₂/kWh — CEA 2024
+  grid2027:       0.58,   // kg CO₂/kWh — CEA projected
+  grid2030:       0.40,   // kg CO₂/kWh — NITI Aayog 50% RE target
+};
+
+// ── Calculation engine ────────────────────────────────────────────────────────
+
+function gridFactor(year, a) {
+  return year === 2025 ? a.grid2025 : year === 2027 ? a.grid2027 : a.grid2030;
 }
 
-function annualCapex(type, subsidy) {
-  let price = PURCHASE[type];
-  if (type === 'ev' && subsidy === 'fame') price *= (1 - FAME_RATE);
-  const depn = price / ASSET_LIFE;
-  return type === 'ev' ? depn + BATTERY_REPLACE / ASSET_LIFE : depn;
+function annualFuelCost(type, kmPA, a) {
+  if (type === 'diesel') return (kmPA / a.dieselEff) * a.dieselPrice;
+  if (type === 'cng')    return (kmPA / a.cngEff)    * a.cngPrice;
+  return kmPA * a.evKwh * a.evTariff;
 }
 
-function tcoBreakdown(type, kmPA, subsidy) {
-  const capex = annualCapex(type, subsidy);
-  const fuel  = annualFuelCost(type, kmPA);
-  const maint = MAINTENANCE[type];
-  const ins   = INSURANCE[type];
+function annualCapex(type, subsidy, a) {
+  let price = type === 'diesel' ? a.purchaseDiesel
+            : type === 'cng'    ? a.purchaseCNG
+            :                    a.purchaseEV;
+  if (type === 'ev' && subsidy === 'fame') price *= (1 - a.fameRate / 100);
+  const depn = price / a.assetLife;
+  return type === 'ev' ? depn + a.batteryReplace / a.assetLife : depn;
+}
+
+function tcoBreakdown(type, kmPA, subsidy, a) {
+  const capex = annualCapex(type, subsidy, a);
+  const fuel  = annualFuelCost(type, kmPA, a);
+  const maint = type === 'diesel' ? a.maintDiesel : type === 'cng' ? a.maintCNG : a.maintEV;
+  const ins   = type === 'diesel' ? a.insDiesel   : type === 'cng' ? a.insCNG   : a.insEV;
   return { capex, fuel, maint, ins, total: capex + fuel + maint + ins };
 }
 
-function busco2KgPA(type, kmPA, gridYear) {
-  if (type === 'ev') return kmPA * EV_KWH_PER_KM * (GRID_FACTOR[gridYear] ?? 0.70);
-  return kmPA * CO2_PER_KM[type];
+function busco2KgPA(type, kmPA, gridYear, a) {
+  if (type === 'ev') return kmPA * a.evKwh * gridFactor(gridYear, a);
+  return kmPA * (type === 'diesel' ? a.co2Diesel : a.co2CNG);
 }
 
-function computeScenario({ nDiesel, nCNG, nEV, kmPA, subsidy, gridYear }) {
+function computeScenario({ nDiesel, nCNG, nEV, kmPA, subsidy, gridYear, a }) {
   const total = nDiesel + nCNG + nEV;
   if (total === 0) return null;
 
   const tco = {
-    diesel: tcoBreakdown('diesel', kmPA, subsidy),
-    cng:    tcoBreakdown('cng',    kmPA, subsidy),
-    ev:     tcoBreakdown('ev',     kmPA, subsidy),
+    diesel: tcoBreakdown('diesel', kmPA, subsidy, a),
+    cng:    tcoBreakdown('cng',    kmPA, subsidy, a),
+    ev:     tcoBreakdown('ev',     kmPA, subsidy, a),
   };
 
   const scenarioCost = nDiesel * tco.diesel.total + nCNG * tco.cng.total + nEV * tco.ev.total;
   const baselineCost = total   * tco.diesel.total;
   const savingsPA    = baselineCost - scenarioCost;
 
-  // CO₂ in tonnes
   const scenarioCO2 = (
-    nDiesel * busco2KgPA('diesel', kmPA, gridYear) +
-    nCNG    * busco2KgPA('cng',    kmPA, gridYear) +
-    nEV     * busco2KgPA('ev',     kmPA, gridYear)
-  ) / 1000;
-  const baselineCO2 = total * busco2KgPA('diesel', kmPA, gridYear) / 1000;
+    nDiesel * busco2KgPA('diesel', kmPA, gridYear, a) +
+    nCNG    * busco2KgPA('cng',    kmPA, gridYear, a) +
+    nEV     * busco2KgPA('ev',     kmPA, gridYear, a)
+  ) / 1000; // kg → tonnes
+  const baselineCO2 = total * busco2KgPA('diesel', kmPA, gridYear, a) / 1000;
   const co2Saved    = baselineCO2 - scenarioCO2;
 
-  // 8-year cumulative in ₹Cr
   const cumulative = Array.from({ length: 9 }, (_, yr) => ({
     year:     `Y${yr}`,
     Baseline: +(yr * baselineCost / 1e7).toFixed(2),
     Scenario: +(yr * scenarioCost / 1e7).toFixed(2),
   }));
 
-  // EV payback: extra upfront (vs diesel) ÷ annual opex saving
-  const evPurchaseNet = PURCHASE.ev * (subsidy === 'fame' ? (1 - FAME_RATE) : 1);
-  const evExtraCapex  = evPurchaseNet - PURCHASE.diesel;
-  const evOpexSavingPA = (tco.diesel.fuel + tco.diesel.maint + tco.diesel.ins)
-                       - (tco.ev.fuel    + tco.ev.maint    + tco.ev.ins   );
-  const breakevenYears = evOpexSavingPA > 0
-    ? +(evExtraCapex / evOpexSavingPA).toFixed(1)
+  // EV payback: extra upfront vs diesel ÷ annual opex saving
+  const evNetPrice    = a.purchaseEV * (subsidy === 'fame' ? (1 - a.fameRate / 100) : 1);
+  const evExtraCapex  = evNetPrice - a.purchaseDiesel;
+  const evOpexSaving  = (tco.diesel.fuel + tco.diesel.maint + tco.diesel.ins)
+                      - (tco.ev.fuel    + tco.ev.maint    + tco.ev.ins   );
+  const breakevenYears = evOpexSaving > 0
+    ? +(evExtraCapex / evOpexSaving).toFixed(1)
     : Infinity;
 
-  // Grid CO₂ parity year: when does 1.5 kWh/km × gridFactor < 0.850 kg/km?
-  // i.e. gridFactor < 0.850 / 1.5 = 0.567
-  const PARITY_GRID = CO2_PER_KM.diesel / EV_KWH_PER_KM; // 0.567
+  // Grid CO₂ parity: when does EV CO₂/km < diesel CO₂/km?
+  const parityGrid = a.co2Diesel / a.evKwh;
   let parityYear;
-  if (GRID_FACTOR[2025] <= PARITY_GRID) {
-    parityYear = 2025;
-  } else if (GRID_FACTOR[2027] <= PARITY_GRID) {
-    const frac = (GRID_FACTOR[2025] - PARITY_GRID) / (GRID_FACTOR[2025] - GRID_FACTOR[2027]);
+  if (gridFactor(2025, a) <= parityGrid)      parityYear = 2025;
+  else if (gridFactor(2027, a) <= parityGrid) {
+    const frac = (gridFactor(2025, a) - parityGrid) / (gridFactor(2025, a) - gridFactor(2027, a));
     parityYear = Math.round(2025 + frac * 2);
   } else {
-    const frac = (GRID_FACTOR[2027] - PARITY_GRID) / (GRID_FACTOR[2027] - GRID_FACTOR[2030]);
+    const frac = (gridFactor(2027, a) - parityGrid) / (gridFactor(2027, a) - gridFactor(2030, a));
     parityYear = Math.round(2027 + frac * 3);
   }
 
@@ -126,7 +146,7 @@ const cr  = v => `₹${(v / 1e7).toFixed(2)} Cr`;
 const L   = v => `₹${(v / 1e5).toFixed(1)}L`;
 const fmt = v => Number(v).toLocaleString('en-IN');
 
-// ── Chart tooltip components ──────────────────────────────────────────────────
+// ── Chart tooltips ────────────────────────────────────────────────────────────
 
 function TCOTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
@@ -161,9 +181,17 @@ function LineTooltip({ active, payload, label }) {
   );
 }
 
-// ── Chart components ──────────────────────────────────────────────────────────
+// ── Charts ────────────────────────────────────────────────────────────────────
 
 const STACK_COLORS = { capex: '#6366f1', fuel: '#f97316', maint: '#10b981', ins: '#94a3b8' };
+
+const CO2_BARS = [
+  { key: 'Diesel',  fill: '#64748b' },
+  { key: 'CNG',     fill: '#94a3b8' },
+  { key: 'EV 2025', fill: '#f97316' },
+  { key: 'EV 2027', fill: '#f59e0b' },
+  { key: 'EV 2030', fill: '#10b981' },
+];
 
 function TCOChart({ tco }) {
   const toL = v => +(v / 1e5).toFixed(1);
@@ -189,31 +217,29 @@ function TCOChart({ tco }) {
   );
 }
 
-const CO2_COLORS = ['#64748b', '#94a3b8', '#f97316', '#f59e0b', '#10b981'];
-
-function CO2Chart({ kmPA }) {
-  const data = [
-    { name: 'Diesel',  co2: Math.round(kmPA * CO2_PER_KM.diesel) },
-    { name: 'CNG',     co2: Math.round(kmPA * CO2_PER_KM.cng)    },
-    { name: 'EV 2025', co2: Math.round(kmPA * EV_KWH_PER_KM * GRID_FACTOR[2025]) },
-    { name: 'EV 2027', co2: Math.round(kmPA * EV_KWH_PER_KM * GRID_FACTOR[2027]) },
-    { name: 'EV 2030', co2: Math.round(kmPA * EV_KWH_PER_KM * GRID_FACTOR[2030]) },
-  ];
-  const dieselVal = kmPA * CO2_PER_KM.diesel;
+function CO2Chart({ kmPA, a }) {
+  const chartData = [{
+    'Diesel':  Math.round(kmPA * a.co2Diesel),
+    'CNG':     Math.round(kmPA * a.co2CNG),
+    'EV 2025': Math.round(kmPA * a.evKwh * a.grid2025),
+    'EV 2027': Math.round(kmPA * a.evKwh * a.grid2027),
+    'EV 2030': Math.round(kmPA * a.evKwh * a.grid2030),
+  }];
   return (
     <ResponsiveContainer width="100%" height={210}>
-      <BarChart data={data} margin={{ top: 4, right: 40, left: 0, bottom: 0 }}>
+      <BarChart data={chartData} margin={{ top: 4, right: 60, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-        <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+        <XAxis tick={false} height={4} />
         <YAxis tickFormatter={v => `${(v / 1000).toFixed(0)}t`} tick={{ fontSize: 11 }} width={40} />
-        <Tooltip formatter={v => [`${fmt(v)} kg`, 'CO₂ / bus / year']} />
+        <Tooltip formatter={(v, name) => [`${fmt(v)} kg CO₂`, name]} />
+        <Legend formatter={n => <span style={{ fontSize: 11 }}>{n}</span>} />
         <ReferenceLine
-          y={dieselVal} stroke="#ef4444" strokeDasharray="4 2"
+          y={kmPA * a.co2Diesel} stroke="#ef4444" strokeDasharray="4 2"
           label={{ value: 'Diesel baseline', fill: '#ef4444', fontSize: 10, position: 'right' }}
         />
-        <Bar dataKey="co2" name="CO₂" radius={[4, 4, 0, 0]}>
-          {data.map((_, i) => <Cell key={i} fill={CO2_COLORS[i]} />)}
-        </Bar>
+        {CO2_BARS.map(b => (
+          <Bar key={b.key} dataKey={b.key} fill={b.fill} radius={[4, 4, 0, 0]} maxBarSize={48} />
+        ))}
       </BarChart>
     </ResponsiveContainer>
   );
@@ -321,234 +347,171 @@ function InsightCard({ icon: Icon, iconBg, iconColor, title, headline, headlineC
   );
 }
 
-// ── Methodology modal ─────────────────────────────────────────────────────────
+// ── Methodology / Assumptions modal ──────────────────────────────────────────
 
-function Formula({ children }) {
+function EditRow({ label, value, unit, source, step, min, onChange, changed }) {
   return (
-    <div className="bg-slate-900 text-green-300 rounded-lg px-4 py-2.5 font-mono text-xs leading-relaxed my-2">
-      {children}
+    <div className={cn(
+      'flex items-center py-2 border-b border-slate-50 gap-3',
+      changed && 'bg-amber-50/60 -mx-2 px-2 rounded'
+    )}>
+      <span className="text-xs text-slate-600 flex-1">{label}</span>
+      <input
+        type="number"
+        value={value}
+        step={step ?? 1}
+        min={min ?? 0}
+        onChange={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) onChange(v); }}
+        className={cn(
+          'w-20 text-xs text-right font-bold border rounded-lg px-2 py-1.5 focus:outline-none transition-colors',
+          changed
+            ? 'border-amber-400 text-amber-700 bg-amber-50 focus:border-amber-500'
+            : 'border-slate-200 text-slate-800 bg-white focus:border-indigo-400'
+        )}
+      />
+      <span className="text-xs text-slate-500 w-14 text-left whitespace-nowrap">{unit}</span>
+      <span className="text-xs text-slate-400 w-36 text-right leading-tight">{source}</span>
     </div>
   );
 }
 
 function MSection({ title, children }) {
   return (
-    <div className="mb-7">
-      <h3 className="text-sm font-bold text-slate-800 mb-3 pb-2 border-b border-slate-100">{title}</h3>
+    <div className="mb-6">
+      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3 pt-1">{title}</h3>
       {children}
     </div>
   );
 }
 
-function MRow({ label, value, source }) {
+function Formula({ children }) {
   return (
-    <div className="flex items-start justify-between py-1.5 border-b border-slate-50 gap-4">
-      <span className="text-xs text-slate-600 flex-1">{label}</span>
-      <span className="text-xs font-bold text-slate-800 text-right whitespace-nowrap">{value}</span>
-      {source && <span className="text-xs text-slate-400 text-right whitespace-nowrap">{source}</span>}
+    <div className="bg-slate-900 text-green-300 rounded-lg px-4 py-3 font-mono text-xs leading-relaxed my-2 whitespace-pre">
+      {children}
     </div>
   );
 }
 
-function MethodologyModal({ onClose }) {
+function MethodologyModal({ a, onChange, onReset, onClose }) {
+  const set = key => val => onChange(key, val);
+  const changed = key => a[key] !== DEFAULT_A[key];
+
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div
-        className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col"
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
           <div>
             <h2 className="font-bold text-slate-800">Calculation Methodology</h2>
-            <p className="text-xs text-slate-400 mt-0.5">How every number in the Scenario Engine is derived</p>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Edit any assumption — all charts update live.
+              <span className="ml-1 text-amber-500 font-medium">Amber = changed from default.</span>
+            </p>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 transition-colors p-1">
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onReset}
+              className="text-xs text-slate-400 hover:text-indigo-600 flex items-center gap-1 transition-colors px-2 py-1.5 rounded-lg hover:bg-slate-50"
+            >
+              <RotateCcw size={11} /> Reset all
+            </button>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-700 transition-colors p-1">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         {/* Scrollable body */}
-        <div className="overflow-y-auto px-6 py-5 text-sm space-y-1">
+        <div className="overflow-y-auto px-6 py-4">
 
-          <MSection title="1. Input Assumptions">
-            <p className="text-xs text-slate-500 mb-3">All constants are fixed to real Indian market data — not assumed or made up.</p>
-            <MRow label="Diesel price"              value="₹92 / L"          source="IOC pump, Mumbai/Pune" />
-            <MRow label="CNG price"                 value="₹76 / kg"         source="MGL retail rate" />
-            <MRow label="EV overnight tariff"       value="₹4.5 / kWh"       source="MSEDCL ToU, weighted avg" />
-            <MRow label="Diesel fuel efficiency"    value="4.0 km / L"        source="CIRT Pune, 12m city bus" />
-            <MRow label="CNG fuel efficiency"       value="3.5 km / kg"       source="ICAT benchmark" />
-            <MRow label="EV energy consumption"     value="1.5 kWh / km"      source="FAME II certified" />
-            <MRow label="Diesel bus purchase"       value="₹35 L"             source="Tata Motors CV price list" />
-            <MRow label="CNG bus purchase"          value="₹45 L"             source="Tata Motors CV price list" />
-            <MRow label="EV bus purchase"           value="₹1.5 Cr"           source="Tata Starbus EV ex-showroom" />
-            <MRow label="FAME II subsidy"           value="40% off EV price"  source="MHI notification, eff. 2021" />
-            <MRow label="Battery replacement cost"  value="₹50 L at year 6"   source="Industry avg, 300 kWh pack" />
-            <MRow label="Asset life"                value="8 years"           source="Standard fleet planning" />
-            <MRow label="Diesel maintenance / yr"   value="₹3.5 L / bus"      source="UITP operator survey" />
-            <MRow label="CNG maintenance / yr"      value="₹2.8 L / bus"      source="UITP operator survey" />
-            <MRow label="EV maintenance / yr"       value="₹1.2 L / bus"      source="UITP / Tata Motors data" />
-            <MRow label="Insurance / yr (all)"      value="₹1.0–1.1 L / bus"  source="Industry standard" />
-            <MRow label="India grid 2025"           value="0.70 kg CO₂ / kWh" source="CEA Annual Report 2024" />
-            <MRow label="India grid 2027 (proj.)"   value="0.58 kg CO₂ / kWh" source="CEA trajectory" />
-            <MRow label="India grid 2030 (proj.)"   value="0.40 kg CO₂ / kWh" source="NITI Aayog / 50% RE target" />
-            <MRow label="Diesel CO₂ / km"           value="0.850 kg CO₂ / km" source="MoRTH / CPCB" />
-            <MRow label="CNG CO₂ / km"              value="0.650 kg CO₂ / km" source="CPCB (24% less than diesel)" />
+          {/* ── Editable assumptions ── */}
+          <MSection title="Fuel Prices">
+            <EditRow label="Diesel price"        value={a.dieselPrice}  unit="₹ / L"    source="IOC pump, Mumbai/Pune" step={0.5} onChange={set('dieselPrice')}  changed={changed('dieselPrice')} />
+            <EditRow label="CNG price"            value={a.cngPrice}     unit="₹ / kg"   source="MGL retail rate"       step={0.5} onChange={set('cngPrice')}     changed={changed('cngPrice')} />
+            <EditRow label="EV overnight tariff"  value={a.evTariff}     unit="₹ / kWh"  source="MSEDCL ToU weighted"   step={0.1} onChange={set('evTariff')}     changed={changed('evTariff')} />
           </MSection>
 
-          <MSection title="2. Annual Fuel / Energy Cost per Bus">
-            <p className="text-xs text-slate-500 mb-1">Fuel cost scales linearly with kilometres driven.</p>
+          <MSection title="Fuel Efficiency">
+            <EditRow label="Diesel efficiency"  value={a.dieselEff} unit="km / L"    source="CIRT Pune, 12m bus" step={0.1} onChange={set('dieselEff')} changed={changed('dieselEff')} />
+            <EditRow label="CNG efficiency"     value={a.cngEff}    unit="km / kg"   source="ICAT benchmark"     step={0.1} onChange={set('cngEff')}    changed={changed('cngEff')} />
+            <EditRow label="EV consumption"     value={a.evKwh}     unit="kWh / km"  source="FAME II certified"  step={0.05} onChange={set('evKwh')}   changed={changed('evKwh')} />
+          </MSection>
+
+          <MSection title="Vehicle Purchase Cost">
+            <EditRow label="Diesel bus"  value={a.purchaseDiesel / 1e5}  unit="₹ Lakh"  source="Tata Motors CV list"       step={0.5} onChange={v => onChange('purchaseDiesel', v * 1e5)} changed={changed('purchaseDiesel')} />
+            <EditRow label="CNG bus"     value={a.purchaseCNG    / 1e5}  unit="₹ Lakh"  source="Tata Motors CV list"       step={0.5} onChange={v => onChange('purchaseCNG',    v * 1e5)} changed={changed('purchaseCNG')} />
+            <EditRow label="EV bus"      value={a.purchaseEV     / 1e5}  unit="₹ Lakh"  source="Tata Starbus EV ex-show"   step={5}   onChange={v => onChange('purchaseEV',     v * 1e5)} changed={changed('purchaseEV')} />
+          </MSection>
+
+          <MSection title="EV Economics">
+            <EditRow label="FAME II subsidy"         value={a.fameRate}               unit="%"        source="MHI notification"         step={1}   min={0} onChange={set('fameRate')}       changed={changed('fameRate')} />
+            <EditRow label="Battery replacement"     value={a.batteryReplace / 1e5}  unit="₹ Lakh"   source="300 kWh pack, at yr 6"    step={5}   onChange={v => onChange('batteryReplace', v * 1e5)} changed={changed('batteryReplace')} />
+            <EditRow label="Asset life"              value={a.assetLife}              unit="years"     source="Standard fleet planning"  step={1}   min={1} onChange={set('assetLife')}       changed={changed('assetLife')} />
+          </MSection>
+
+          <MSection title="Maintenance (₹ Lakh / bus / year)">
+            <EditRow label="Diesel maintenance" value={a.maintDiesel / 1e5} unit="₹ Lakh" source="UITP operator survey" step={0.1} onChange={v => onChange('maintDiesel', v * 1e5)} changed={changed('maintDiesel')} />
+            <EditRow label="CNG maintenance"    value={a.maintCNG    / 1e5} unit="₹ Lakh" source="UITP operator survey" step={0.1} onChange={v => onChange('maintCNG',    v * 1e5)} changed={changed('maintCNG')} />
+            <EditRow label="EV maintenance"     value={a.maintEV     / 1e5} unit="₹ Lakh" source="UITP / Tata Motors"   step={0.1} onChange={v => onChange('maintEV',     v * 1e5)} changed={changed('maintEV')} />
+          </MSection>
+
+          <MSection title="CO₂ Emission Factors (measured — change to test sensitivity)">
+            <EditRow label="Diesel CO₂"          value={a.co2Diesel} unit="kg / km"    source="MoRTH / CPCB"          step={0.01} onChange={set('co2Diesel')} changed={changed('co2Diesel')} />
+            <EditRow label="CNG CO₂"             value={a.co2CNG}    unit="kg / km"    source="CPCB (24% below diesel)" step={0.01} onChange={set('co2CNG')}    changed={changed('co2CNG')} />
+            <EditRow label="Grid 2025"           value={a.grid2025}  unit="kg CO₂/kWh" source="CEA Annual Report 2024"  step={0.01} onChange={set('grid2025')}  changed={changed('grid2025')} />
+            <EditRow label="Grid 2027 (proj.)"   value={a.grid2027}  unit="kg CO₂/kWh" source="CEA trajectory"          step={0.01} onChange={set('grid2027')}  changed={changed('grid2027')} />
+            <EditRow label="Grid 2030 (proj.)"   value={a.grid2030}  unit="kg CO₂/kWh" source="NITI Aayog 50% RE target" step={0.01} onChange={set('grid2030')} changed={changed('grid2030')} />
+          </MSection>
+
+          {/* ── Formula reference ── */}
+          <div className="border-t border-slate-100 pt-5 mt-2">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-4">How Each Output Is Calculated</h3>
+
+            <p className="text-xs font-semibold text-slate-700 mb-1">Annual Fuel / Energy Cost</p>
             <Formula>
-              Diesel  = (kmPA ÷ 4.0 km/L)  × ₹92/L{'\n'}
-              CNG     = (kmPA ÷ 3.5 km/kg) × ₹76/kg{'\n'}
-              EV      =  kmPA × 1.5 kWh/km × ₹4.5/kWh
+              {'Diesel  = (kmPA ÷ dieselEff) × dieselPrice\n'}
+              {'CNG     = (kmPA ÷ cngEff)    × cngPrice\n'}
+              {'EV      =  kmPA × evKwh      × evTariff'}
             </Formula>
-            <p className="text-xs text-slate-500">
-              At 60,000 km/yr: Diesel = ₹13.8 L · CNG = ₹13.0 L · EV = ₹4.1 L.
-              EV fuel is <strong>70% cheaper</strong> than diesel per year — but capex offsets this.
-            </p>
-          </MSection>
 
-          <MSection title="3. Capital Expenditure (Capex) per Bus per Year">
-            <p className="text-xs text-slate-500 mb-1">Straight-line depreciation over 8 years. EV adds battery replacement cost.</p>
+            <p className="text-xs font-semibold text-slate-700 mt-4 mb-1">Annual Capex (straight-line depreciation)</p>
             <Formula>
-              Diesel capex = ₹35 L ÷ 8 yrs          = ₹4.4 L/yr{'\n'}
-              CNG capex    = ₹45 L ÷ 8 yrs          = ₹5.6 L/yr{'\n'}
-              EV capex     = ₹1.5 Cr ÷ 8 yrs        = ₹18.75 L/yr{'\n'}
-                           + ₹50 L battery ÷ 8 yrs  = ₹6.25 L/yr{'\n'}
-                           = ₹25 L/yr  (no subsidy){'\n'}
-              {'\n'}
-              With FAME II: ₹1.5 Cr × 0.60 = ₹90 L net{'\n'}
-              EV capex (FAME) = ₹90 L ÷ 8 + ₹6.25 L = ₹17.5 L/yr
+              {'Diesel/CNG capex = purchasePrice ÷ assetLife\n'}
+              {'EV capex         = (purchaseEV × (1 − fameRate%)) ÷ assetLife\n'}
+              {'               + batteryReplace ÷ assetLife'}
             </Formula>
-          </MSection>
 
-          <MSection title="4. Total Cost of Ownership (TCO) per Bus per Year">
+            <p className="text-xs font-semibold text-slate-700 mt-4 mb-1">Total TCO per Bus per Year</p>
             <Formula>
-              TCO = Capex + Fuel/Energy + Maintenance + Insurance
+              {'TCO = Capex + Fuel/Energy + Maintenance + Insurance'}
             </Formula>
-            <div className="overflow-x-auto mt-2">
-              <table className="w-full text-xs border-collapse">
-                <thead>
-                  <tr className="bg-slate-50">
-                    <th className="text-left py-1.5 px-2 text-slate-500 font-semibold">Component</th>
-                    <th className="text-right py-1.5 px-2 text-slate-500 font-semibold">Diesel</th>
-                    <th className="text-right py-1.5 px-2 text-slate-500 font-semibold">CNG</th>
-                    <th className="text-right py-1.5 px-2 text-slate-500 font-semibold">EV (no sub.)</th>
-                    <th className="text-right py-1.5 px-2 text-slate-500 font-semibold">EV (FAME II)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[
-                    ['Capex',        '₹4.4 L',  '₹5.6 L',  '₹25.0 L', '₹17.5 L'],
-                    ['Fuel/Energy',  '₹13.8 L', '₹13.0 L', '₹4.1 L',  '₹4.1 L' ],
-                    ['Maintenance',  '₹3.5 L',  '₹2.8 L',  '₹1.2 L',  '₹1.2 L' ],
-                    ['Insurance',    '₹1.0 L',  '₹1.0 L',  '₹1.1 L',  '₹1.1 L' ],
-                    ['Total / yr',   '₹22.7 L', '₹22.4 L', '₹31.4 L', '₹23.9 L'],
-                  ].map(([comp, d, c, e, ef]) => (
-                    <tr key={comp} className={comp === 'Total / yr' ? 'font-bold bg-slate-50' : ''}>
-                      <td className="py-1.5 px-2 text-slate-600">{comp}</td>
-                      <td className="py-1.5 px-2 text-right text-slate-800">{d}</td>
-                      <td className="py-1.5 px-2 text-right text-slate-800">{c}</td>
-                      <td className="py-1.5 px-2 text-right text-slate-800">{e}</td>
-                      <td className="py-1.5 px-2 text-right text-green-700">{ef}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="text-xs text-slate-500 mt-2">
-              Key insight: <strong>Without FAME II, EV TCO is worse than diesel.</strong> The 40% subsidy
-              flips it — EV becomes cheapest by ₹4–6 L/bus/yr.
-              CNG and diesel are nearly identical; CNG's lower fuel cost is eaten by higher purchase price.
-            </p>
-          </MSection>
 
-          <MSection title="5. CO₂ Emissions per Bus per Year">
+            <p className="text-xs font-semibold text-slate-700 mt-4 mb-1">CO₂ per Bus per Year</p>
             <Formula>
-              Diesel CO₂  = 60,000 km × 0.850 kg/km        = 51.0 t/yr{'\n'}
-              CNG CO₂     = 60,000 km × 0.650 kg/km        = 39.0 t/yr{'\n'}
-              EV CO₂      = 60,000 km × 1.5 kWh/km × grid factor{'\n'}
-              {'\n'}
-              @ 2025 grid (0.70): EV = 63.0 t/yr  ← worse than diesel!{'\n'}
-              @ 2027 grid (0.58): EV = 52.2 t/yr  ← parity with diesel{'\n'}
-              @ 2030 grid (0.40): EV = 36.0 t/yr  ← 29% better than diesel
+              {'Diesel CO₂ = kmPA × co2Diesel\n'}
+              {'CNG CO₂    = kmPA × co2CNG\n'}
+              {'EV CO₂     = kmPA × evKwh × gridFactor(year)\n\n'}
+              {'Key: on 2025 grid (0.70), EV = kmPA × 1.5 × 0.70\n'}
+              {'     which exceeds diesel at 2025 — EVs become cleaner ~2027'}
             </Formula>
-            <p className="text-xs text-slate-500">
-              This is the most counter-intuitive result. On India's 2025 coal-heavy grid, an EV bus
-              produces <strong>more</strong> CO₂ than a diesel bus. It only becomes cleaner as
-              renewable energy displaces coal — around 2027 at the current trajectory.
-              Panellist question to expect: "Why is EV worse?" — this formula is the answer.
-            </p>
-          </MSection>
 
-          <MSection title="6. EV Payback Period">
-            <p className="text-xs text-slate-500 mb-1">
-              How many years does it take for EV fuel + maintenance savings to recover the extra purchase cost vs diesel?
-            </p>
+            <p className="text-xs font-semibold text-slate-700 mt-4 mb-1">EV Payback Period</p>
             <Formula>
-              Extra upfront cost  = EV net price − Diesel price{'\n'}
-              No subsidy: ₹150 L − ₹35 L = ₹115 L per bus{'\n'}
-              FAME II:    ₹90 L  − ₹35 L = ₹55 L  per bus{'\n'}
-              {'\n'}
-              Annual opex saving  = (Diesel fuel + maint + ins){'\n'}
-                                  − (EV energy  + maint + ins){'\n'}
-                                  = ₹18.3 L − ₹6.4 L = ₹11.9 L/bus/yr{'\n'}
-              {'\n'}
-              Payback (no FAME)   = ₹115 L ÷ ₹11.9 L = ~9.7 yrs  (exceeds 8yr life){'\n'}
-              Payback (FAME II)   = ₹55 L  ÷ ₹11.9 L = ~4.6 yrs  ✓
+              {'extraCapex   = (purchaseEV × (1−fameRate%)) − purchaseDiesel\n'}
+              {'opexSaving   = (diesel fuel+maint+ins) − (EV energy+maint+ins)\n'}
+              {'paybackYears = extraCapex ÷ opexSaving'}
             </Formula>
-            <p className="text-xs text-slate-500">
-              Battery replacement cost is <em>excluded</em> from the payback numerator — it applies
-              equally whether you measure payback from day 1 or year 5. It is included in the
-              annual TCO capex line instead.
-            </p>
-          </MSection>
 
-          <MSection title="7. Grid CO₂ Parity Year">
-            <p className="text-xs text-slate-500 mb-1">
-              At what grid emission factor does EV CO₂/km fall below diesel CO₂/km?
-            </p>
+            <p className="text-xs font-semibold text-slate-700 mt-4 mb-1">Grid CO₂ Parity Year</p>
             <Formula>
-              EV CO₂/km = 1.5 kWh/km × grid_factor{'\n'}
-              Diesel CO₂/km = 0.850 kg/km{'\n'}
-              {'\n'}
-              Parity when: 1.5 × grid_factor = 0.850{'\n'}
-              → grid_factor = 0.850 ÷ 1.5 = 0.567 kg CO₂/kWh{'\n'}
-              {'\n'}
-              Grid trajectory (CEA):{'\n'}
-                2025 → 0.70   (above parity){'\n'}
-                2027 → 0.58   (just above — linear interpolation gives ~2027.2){'\n'}
-                2030 → 0.40   (well below){'\n'}
-              {'\n'}
-              Parity year ≈ 2027  (linear interp between 2025 and 2027 anchors)
+              {'Parity when: evKwh × gridFactor = co2Diesel\n'}
+              {'  → gridFactor* = co2Diesel ÷ evKwh\n'}
+              {'  → linear interpolate between CEA grid anchors'}
             </Formula>
-          </MSection>
-
-          <MSection title="8. Charger Bay Estimate">
-            <Formula>
-              Charger bays needed = ⌈ nEV ÷ 3 ⌉
-            </Formula>
-            <p className="text-xs text-slate-500">
-              Rule of thumb: 1 overnight charger bay serves ~3 buses (buses return in staggered
-              windows; not all need charging simultaneously). The Charging Planner page runs the
-              exact interval-graph coloring algorithm on your actual trip schedule for a precise count.
-              This estimate is intentionally conservative for early-stage planning.
-            </p>
-          </MSection>
-
-          <MSection title="9. 8-Year Cumulative Cost">
-            <Formula>
-              Baseline(yr)  = yr × (total_buses × diesel_TCO_per_bus){'\n'}
-              Scenario(yr)  = yr × (n_diesel × diesel_TCO + n_CNG × cng_TCO + n_EV × ev_TCO){'\n'}
-              {'\n'}
-              Gap at year 8 = Baseline(8) − Scenario(8)  [total saving or extra cost]
-            </Formula>
-            <p className="text-xs text-slate-500">
-              This is a simple linear projection — it assumes constant fuel prices and constant km/yr.
-              In reality, rising diesel prices will widen the gap in EV's favour over time.
-            </p>
-          </MSection>
+          </div>
 
         </div>
       </div>
@@ -558,41 +521,54 @@ function MethodologyModal({ onClose }) {
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
-const DEFAULT = { total: 100, nEV: 0, nCNG: 0, kmPA: 60_000, subsidy: 'fame', gridYear: 2027 };
+const DEFAULT_SCENARIO = { total: 100, nEV: 0, nCNG: 0, kmPA: 60_000, subsidy: 'fame', gridYear: 2027 };
 
 export default function ScenarioEngine() {
-  const [total,    setTotal]    = useState(DEFAULT.total);
-  const [nEV,      setNEV]      = useState(DEFAULT.nEV);
-  const [nCNG,     setNCNG]     = useState(DEFAULT.nCNG);
-  const [kmPA,     setKmPA]     = useState(DEFAULT.kmPA);
-  const [subsidy,  setSubsidy]  = useState(DEFAULT.subsidy);
-  const [gridYear, setGridYear] = useState(DEFAULT.gridYear);
+  const [total,    setTotal]    = useState(DEFAULT_SCENARIO.total);
+  const [nEV,      setNEV]      = useState(DEFAULT_SCENARIO.nEV);
+  const [nCNG,     setNCNG]     = useState(DEFAULT_SCENARIO.nCNG);
+  const [kmPA,     setKmPA]     = useState(DEFAULT_SCENARIO.kmPA);
+  const [subsidy,  setSubsidy]  = useState(DEFAULT_SCENARIO.subsidy);
+  const [gridYear, setGridYear] = useState(DEFAULT_SCENARIO.gridYear);
   const [showInfo, setShowInfo] = useState(false);
+  const [a, setA]               = useState(DEFAULT_A);
 
-  // Clamp so EV + CNG never exceeds total
-  const safeEV   = Math.min(nEV,  total);
-  const safeCNG  = Math.min(nCNG, total - safeEV);
-  const nDiesel  = total - safeEV - safeCNG;
+  function updateA(key, val) { setA(prev => ({ ...prev, [key]: val })); }
+  function resetA() { setA(DEFAULT_A); }
+
+  const safeEV  = Math.min(nEV,  total);
+  const safeCNG = Math.min(nCNG, total - safeEV);
+  const nDiesel = total - safeEV - safeCNG;
 
   const result = useMemo(() => computeScenario({
-    nDiesel, nCNG: safeCNG, nEV: safeEV, kmPA, subsidy, gridYear,
-  }), [nDiesel, safeCNG, safeEV, kmPA, subsidy, gridYear]);
+    nDiesel, nCNG: safeCNG, nEV: safeEV, kmPA, subsidy, gridYear, a,
+  }), [nDiesel, safeCNG, safeEV, kmPA, subsidy, gridYear, a]);
 
-  function reset() {
-    setTotal(DEFAULT.total); setNEV(DEFAULT.nEV); setNCNG(DEFAULT.nCNG);
-    setKmPA(DEFAULT.kmPA); setSubsidy(DEFAULT.subsidy); setGridYear(DEFAULT.gridYear);
+  function resetScenario() {
+    setTotal(DEFAULT_SCENARIO.total); setNEV(DEFAULT_SCENARIO.nEV); setNCNG(DEFAULT_SCENARIO.nCNG);
+    setKmPA(DEFAULT_SCENARIO.kmPA); setSubsidy(DEFAULT_SCENARIO.subsidy); setGridYear(DEFAULT_SCENARIO.gridYear);
   }
 
   const savingsPct = result ? (result.savingsPA / result.baselineCost) * 100 : 0;
   const co2Pct     = result ? (result.co2Saved  / result.baselineCO2 ) * 100 : 0;
   const evOnGrid25Worse = safeEV > 0 && gridYear === 2025 &&
-    EV_KWH_PER_KM * GRID_FACTOR[2025] > CO2_PER_KM.diesel;
+    a.evKwh * a.grid2025 > a.co2Diesel;
+
+  // Show amber dot on ⓘ if any assumption has been edited
+  const anyChanged = Object.keys(DEFAULT_A).some(k => a[k] !== DEFAULT_A[k]);
 
   return (
     <div className="flex h-full bg-slate-50 overflow-hidden">
-      {showInfo && <MethodologyModal onClose={() => setShowInfo(false)} />}
+      {showInfo && (
+        <MethodologyModal
+          a={a}
+          onChange={updateA}
+          onReset={resetA}
+          onClose={() => setShowInfo(false)}
+        />
+      )}
 
-      {/* ── Left: Control panel ───────────────────────────────────────────── */}
+      {/* ── Left: Controls ───────────────────────────────────────────────── */}
       <aside className="w-80 flex-shrink-0 bg-white border-r border-slate-100 overflow-y-auto p-5">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2">
@@ -602,13 +578,16 @@ export default function ScenarioEngine() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowInfo(true)}
-              className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 hover:bg-indigo-200 transition-colors"
-              title="How are these calculated?"
+              className="relative w-7 h-7 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 hover:bg-indigo-200 transition-colors"
+              title="View methodology & edit assumptions"
             >
-              <Info size={12} />
+              <Info size={13} />
+              {anyChanged && (
+                <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-amber-400 rounded-full border-2 border-white" />
+              )}
             </button>
             <button
-              onClick={reset}
+              onClick={resetScenario}
               className="text-xs text-slate-400 hover:text-indigo-600 flex items-center gap-1 transition-colors"
             >
               <RotateCcw size={11} /> Reset
@@ -616,84 +595,56 @@ export default function ScenarioEngine() {
           </div>
         </div>
 
-        {/* Fleet size */}
         <section className="mb-6">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-4">Fleet Size</p>
           <SliderRow
-            label="Total buses"
-            value={total} min={20} max={300}
+            label="Total buses" value={total} min={20} max={300}
             onChange={v => { setTotal(v); setNEV(Math.min(nEV, v)); setNCNG(Math.min(nCNG, v - Math.min(nEV, v))); }}
           />
         </section>
 
-        {/* Fleet mix */}
         <section className="mb-6">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-4">Fleet Mix</p>
-          <SliderRow
-            label="EV buses"
-            value={safeEV} min={0} max={total}
-            onChange={v => setNEV(Math.min(v, total - safeCNG))}
-          />
-          <SliderRow
-            label="CNG buses"
-            value={safeCNG} min={0} max={total - safeEV}
-            onChange={setNCNG}
-          />
+          <SliderRow label="EV buses"  value={safeEV}  min={0} max={total}          onChange={v => setNEV(Math.min(v, total - safeCNG))} />
+          <SliderRow label="CNG buses" value={safeCNG} min={0} max={total - safeEV} onChange={setNCNG} />
           <div className="flex items-center justify-between py-2.5 px-3 bg-slate-50 rounded-xl text-sm border border-slate-100">
             <span className="text-slate-500">Diesel (remainder)</span>
             <span className="font-bold text-slate-800">{nDiesel}</span>
           </div>
         </section>
 
-        {/* Operating assumptions */}
         <section className="mb-6">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-4">Operations</p>
           <SliderRow
-            label="Annual km per bus"
-            value={kmPA} min={30_000} max={100_000} step={5_000}
-            onChange={setKmPA}
-            format={v => `${(v / 1000).toFixed(0)}k km`}
+            label="Annual km per bus" value={kmPA} min={30_000} max={100_000} step={5_000}
+            onChange={setKmPA} format={v => `${(v / 1000).toFixed(0)}k km`}
             note="200 km/day × 300 days = 60k km"
           />
         </section>
 
-        {/* EV subsidy */}
         <section className="mb-6">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">EV Subsidy</p>
-          <SegmentedControl
-            value={subsidy}
-            options={[['none', 'None'], ['fame', 'FAME II']]}
-            onChange={setSubsidy}
-          />
-          {subsidy === 'fame' && (
-            <p className="text-xs text-indigo-500 mt-2">40% off EV purchase price — MHI notification</p>
-          )}
-          {subsidy === 'none' && (
-            <p className="text-xs text-slate-400 mt-2">Full ₹1.5 Cr sticker price; battery replacement at yr 6 adds ₹6.25L/yr</p>
-          )}
+          <SegmentedControl value={subsidy} options={[['none', 'None'], ['fame', 'FAME II']]} onChange={setSubsidy} />
+          {subsidy === 'fame'
+            ? <p className="text-xs text-indigo-500 mt-2">{a.fameRate}% off EV price — MHI notification</p>
+            : <p className="text-xs text-slate-400 mt-2">Full ₹{(a.purchaseEV / 1e5).toFixed(0)}L sticker price</p>
+          }
         </section>
 
-        {/* Grid year */}
         <section className="mb-6">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">India Grid Year (CO₂)</p>
-          <SegmentedControl
-            value={gridYear}
-            options={[[2025, '2025'], [2027, '2027'], [2030, '2030']]}
-            onChange={setGridYear}
-          />
+          <SegmentedControl value={gridYear} options={[[2025, '2025'], [2027, '2027'], [2030, '2030']]} onChange={setGridYear} />
           <p className="text-xs text-slate-400 mt-2">
-            {GRID_FACTOR[gridYear]} kg CO₂/kWh — CEA{gridYear > 2025 ? ' projected' : ''}
+            {gridFactor(gridYear, a)} kg CO₂/kWh — CEA{gridYear > 2025 ? ' projected' : ''}
           </p>
         </section>
 
-        {/* Sources */}
-        <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
-          <p className="text-xs text-slate-500 font-semibold mb-1.5 flex items-center gap-1">
-            <Info size={10} /> Data Sources
+        <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3">
+          <p className="text-xs text-indigo-600 font-semibold mb-1 flex items-center gap-1">
+            <Info size={10} /> Tip
           </p>
-          <p className="text-xs text-slate-400 leading-relaxed">
-            Fuel prices: IOC / MGL retail. Vehicle costs: Tata Motors CV price list.
-            Emissions: MoRTH, CPCB. Efficiency: CIRT Pune / ICAT. Grid: CEA Annual Report.
+          <p className="text-xs text-indigo-500 leading-relaxed">
+            Click <strong>ⓘ</strong> above to edit any assumption live — diesel price, vehicle cost, grid factor, and more.
           </p>
         </div>
       </aside>
@@ -707,7 +658,6 @@ export default function ScenarioEngine() {
         ) : (
           <div className="max-w-4xl mx-auto space-y-5">
 
-            {/* KPI row */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <KPI
                 highlight
@@ -716,8 +666,7 @@ export default function ScenarioEngine() {
                 sub={`${total} buses · ${(kmPA / 1000).toFixed(0)}k km/yr each`}
               />
               <KPI
-                danger={result.savingsPA < 0}
-                neutral={result.savingsPA === 0}
+                danger={result.savingsPA < 0} neutral={result.savingsPA === 0}
                 label={result.savingsPA >= 0 ? 'Saved vs all-diesel' : 'Extra cost vs diesel'}
                 value={cr(Math.abs(result.savingsPA))}
                 sub={`${Math.abs(savingsPct).toFixed(1)}% ${result.savingsPA >= 0 ? 'cheaper' : 'more expensive'} / yr`}
@@ -736,53 +685,42 @@ export default function ScenarioEngine() {
               />
             </div>
 
-            {/* TCO breakdown chart */}
             <div className="bg-white rounded-2xl border border-slate-200 p-5">
               <h3 className="font-semibold text-slate-800 text-sm mb-0.5">Per-bus Annual TCO Breakdown</h3>
               <p className="text-xs text-slate-400 mb-4">
-                Capex amortized over {ASSET_LIFE} yrs ·{' '}
+                Capex amortized over {a.assetLife} yrs ·{' '}
                 {(kmPA / 1000).toFixed(0)}k km/yr ·{' '}
-                {subsidy === 'fame' ? 'FAME II subsidy on EV' : 'no subsidy'}
+                {subsidy === 'fame' ? `FAME II ${a.fameRate}% subsidy on EV` : 'no subsidy'}
               </p>
               <TCOChart tco={result.tco} />
               <div className="grid grid-cols-3 gap-3 mt-4 text-center">
                 {(['diesel', 'cng', 'ev']).map(t => (
                   <div key={t} className="bg-slate-50 rounded-xl py-2.5 px-3 border border-slate-100">
-                    <p className="text-xs text-slate-400 uppercase font-semibold mb-0.5">
-                      {t === 'ev' ? 'EV' : t.toUpperCase()}
-                    </p>
+                    <p className="text-xs text-slate-400 uppercase font-semibold mb-0.5">{t === 'ev' ? 'EV' : t.toUpperCase()}</p>
                     <p className="font-bold text-slate-800">{L(result.tco[t].total)}/yr</p>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      ₹{(result.tco[t].total / kmPA).toFixed(1)}/km
-                    </p>
+                    <p className="text-xs text-slate-500 mt-0.5">₹{(result.tco[t].total / kmPA).toFixed(1)}/km</p>
                   </div>
                 ))}
               </div>
             </div>
 
-            {/* CO₂ chart */}
             <div className="bg-white rounded-2xl border border-slate-200 p-5">
-              <h3 className="font-semibold text-slate-800 text-sm mb-0.5">
-                CO₂ Emissions — Per Bus Per Year
-              </h3>
+              <h3 className="font-semibold text-slate-800 text-sm mb-0.5">CO₂ Emissions — Per Bus Per Year</h3>
               <p className="text-xs text-slate-400 mb-4">
                 Red dashed line = diesel baseline. EV emissions shift left as India's grid cleans up.
               </p>
-              <CO2Chart kmPA={kmPA} />
+              <CO2Chart kmPA={kmPA} a={a} />
               {evOnGrid25Worse && (
                 <div className="mt-3 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
                   <Info size={13} className="text-amber-500 mt-0.5 flex-shrink-0" />
                   <p className="text-xs text-amber-700 leading-relaxed">
-                    On the 2025 grid (0.70 kg CO₂/kWh), an EV bus emits{' '}
-                    <strong>more</strong> CO₂ per km than diesel. Switch to 2027 or 2030 to see
-                    when EVs become cleaner — grid parity is around{' '}
-                    <strong>{result.parityYear}</strong>.
+                    On the 2025 grid ({a.grid2025} kg CO₂/kWh), EV buses emit <strong>more</strong> CO₂ per km than diesel.
+                    Grid parity is around <strong>{result.parityYear}</strong> — use the ⓘ modal to test sensitivity.
                   </p>
                 </div>
               )}
             </div>
 
-            {/* 8-year cumulative */}
             <div className="bg-white rounded-2xl border border-slate-200 p-5">
               <h3 className="font-semibold text-slate-800 text-sm mb-0.5">8-Year Cumulative Fleet Cost</h3>
               <p className="text-xs text-slate-400 mb-4">
@@ -796,53 +734,46 @@ export default function ScenarioEngine() {
               )}
               {result.savingsPA < 0 && (
                 <p className="text-xs text-red-500 mt-3 font-medium text-center">
-                  Scenario costs {cr(Math.abs(result.savingsPA * 8))} more than all-diesel over 8 years.
-                  Enable FAME II subsidy to close the gap.
+                  Scenario costs {cr(Math.abs(result.savingsPA * 8))} more over 8 years. Enable FAME II or raise diesel price to close the gap.
                 </p>
               )}
             </div>
 
-            {/* Insight cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <InsightCard
-                icon={TrendingDown}
-                iconBg="bg-indigo-100" iconColor="text-indigo-600"
+                icon={TrendingDown} iconBg="bg-indigo-100" iconColor="text-indigo-600"
                 title="EV Payback Period"
                 headline={
-                  result.breakevenYears === Infinity ? 'No breakeven' :
-                  result.breakevenYears <= 0         ? 'Instant'      :
+                  result.breakevenYears === Infinity    ? 'No breakeven' :
+                  result.breakevenYears <= 0            ? 'Instant'      :
                   `${result.breakevenYears} yrs`
                 }
                 headlineColor={
-                  result.breakevenYears > ASSET_LIFE ? 'text-red-600' :
-                  result.breakevenYears <= 0         ? 'text-green-600' :
+                  result.breakevenYears > a.assetLife ? 'text-red-600' :
+                  result.breakevenYears <= 0          ? 'text-green-600' :
                   'text-indigo-700'
                 }
                 body={
-                  result.breakevenYears > ASSET_LIFE
-                    ? `Exceeds ${ASSET_LIFE}-yr bus life without subsidy. FAME II brings it to ~4.7 yrs by cutting extra capex from ₹115L to ₹55L per bus.`
-                    : `Extra EV capex vs diesel recovered through fuel + maintenance savings alone. Battery replacement at yr 6 included.`
+                  result.breakevenYears > a.assetLife
+                    ? `Exceeds ${a.assetLife}-yr bus life. Enable FAME II or edit EV purchase price in ⓘ to close the gap.`
+                    : `Extra EV capex vs diesel recovered through fuel + maintenance savings. Battery replacement included.`
                 }
               />
-
               <InsightCard
-                icon={Leaf}
-                iconBg="bg-green-100" iconColor="text-green-600"
+                icon={Leaf} iconBg="bg-green-100" iconColor="text-green-600"
                 title="EV Grid CO₂ Parity"
                 headline={`~${result.parityYear}`}
                 headlineColor="text-green-700"
-                body={`Year when India's grid drops below 0.57 kg CO₂/kWh — the threshold where EV buses become cleaner than diesel per km. Grid today: 0.70 kg (CEA 2025). Target by 2030: 0.40 kg.`}
+                body={`When India's grid reaches ${(a.co2Diesel / a.evKwh).toFixed(3)} kg CO₂/kWh, EV buses emit less CO₂/km than diesel. Today: ${a.grid2025} kg/kWh (CEA 2025).`}
               />
-
               <InsightCard
-                icon={Zap}
-                iconBg="bg-amber-100" iconColor="text-amber-600"
+                icon={Zap} iconBg="bg-amber-100" iconColor="text-amber-600"
                 title="Charging Infrastructure"
                 headline={safeEV > 0 ? `${result.chargersNeeded} bays` : 'No EVs'}
                 headlineColor={safeEV > 0 ? 'text-amber-700' : 'text-slate-400'}
                 body={
                   safeEV > 0
-                    ? `Estimated overnight charger bays for ${safeEV} EV buses (1 bay : 3 buses via interval graph scheduling). Use the Charging Planner for exact slot assignments and tariff optimisation.`
+                    ? `Estimated overnight charger bays for ${safeEV} EV buses (1 bay : 3 buses rule of thumb). Use Charging Planner for exact interval-graph scheduling.`
                     : 'Add EV buses using the slider to see charging infrastructure requirements.'
                 }
               />
