@@ -24,6 +24,7 @@ import DefectReports from './pages/DefectReports';
 import TripPlanner      from './pages/TripPlanner';
 import TCOAnalysis      from './pages/TCOAnalysis';
 import ChargingPlanner  from './pages/ChargingPlanner';
+import ScenarioEngine   from './pages/ScenarioEngine';
 import ClientSessions   from './pages/ClientSessions';
 import ClientChat       from './pages/ClientChat';
 
@@ -44,6 +45,7 @@ const PAGES = {
   'trip-planner':      TripPlanner,
   'tco-analysis':      TCOAnalysis,
   'charging-planner':  ChargingPlanner,
+  'scenario-engine':   ScenarioEngine,
   'client-sessions':   ClientSessions,
 };
 

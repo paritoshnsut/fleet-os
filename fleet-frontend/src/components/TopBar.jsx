@@ -17,6 +17,7 @@ export default function TopBar({ connected, activePage }) {
     'fleet-defects': 'Fleet Intelligence — Trip Defect Reports',
     'fleet-setup':   'Fleet Intelligence — Fleet Setup',
     'trip-planner':     'Fleet Intelligence — Trip Planner',
+    'scenario-engine':  'Internal Analysis — Scenario Engine',
     'client-sessions':  'Client Portal — Analysis Sessions',
   };
 

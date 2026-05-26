@@ -5,7 +5,7 @@ import {
   Bus, Shield, MapPin, LayoutDashboard,
   Activity, FileText, Zap,
   ChevronLeft, ChevronRight, AlertTriangle, ClipboardList,
-  LogOut, Users, Route, Settings2, BarChart2, LineChart, ShieldCheck, Link2,
+  LogOut, Users, Route, Settings2, BarChart2, LineChart, ShieldCheck, Link2, SlidersHorizontal,
 } from 'lucide-react';
 
 const NAV = [
@@ -34,6 +34,7 @@ const NAV = [
       { label: 'Trip Planner',       id: 'trip-planner',     icon: Route    },
       { label: 'TCO Cost Analysis',  id: 'tco-analysis',     icon: BarChart2 },
       { label: 'Charging Planner',   id: 'charging-planner', icon: Zap      },
+      { label: 'Scenario Engine',    id: 'scenario-engine',  icon: SlidersHorizontal },
     ],
   },
   {
