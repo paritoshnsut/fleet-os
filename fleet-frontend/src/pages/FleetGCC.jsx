@@ -358,8 +358,7 @@ export default function FleetGCC({ fetchGCC }) {
       if (currentStatus === 'OVERDUE') {
         return { ...prev, [busId]: { status: 'OK', days: 0, _manualPayment: true } };
       } else {
-        const { [busId]: _, ...rest } = prev;
-        return rest;
+        return { ...prev, [busId]: { status: 'OVERDUE', days: paymentCycleDays + 1, _manualPayment: true } };
       }
     });
   }
