@@ -143,7 +143,7 @@ const DEMO_EVENTS = [
   { message: 'All buses on schedule — no delays or incidents reported',        severity: 'low',    busId: null,           routeNo: null  },
 ];
 
-export default function FleetMap({ buses, alerts, demoActive = false, setDemoActive }) {
+export default function FleetMap({ buses, alerts, demoActive = false, setDemoActive, onDemoAlert }) {
   const { config } = useFleetConfig();
   const { overspeedThreshold, gccRatePerKm } = config;
   const { user } = useAuth();
@@ -154,10 +154,11 @@ export default function FleetMap({ buses, alerts, demoActive = false, setDemoAct
   const [toasts,      setToasts]      = useState([]);
   const [frozenBuses, setFrozenBuses] = useState([]);
   const [groundedIds, setGroundedIds] = useState(new Set());
-  const seenRef       = useRef(new Set());
-  const mountedRef    = useRef(false);
-  const demoActiveRef = useRef(false);
-  const busesRef      = useRef(buses);
+  const seenRef        = useRef(new Set());
+  const mountedRef     = useRef(false);
+  const demoActiveRef  = useRef(false);
+  const busesRef       = useRef(buses);
+  const autoStopRef    = useRef(null);
 
   // Keep ref in sync so setTimeout closures always read the latest value
   useEffect(() => { demoActiveRef.current = demoActive; }, [demoActive]);
@@ -237,9 +238,13 @@ export default function FleetMap({ buses, alerts, demoActive = false, setDemoAct
     mountedRef.current = true;
   }, [alerts]);
 
+  // Cancel auto-stop if user navigates away — demo keeps running until they click Stop
+  useEffect(() => () => { if (autoStopRef.current) clearTimeout(autoStopRef.current); }, []);
+
   function startDemo() {
     if (demoActive) {
       demoActiveRef.current = false;
+      if (autoStopRef.current) { clearTimeout(autoStopRef.current); autoStopRef.current = null; }
       setDemoActive(false);
       return;
     }
@@ -251,6 +256,7 @@ export default function FleetMap({ buses, alerts, demoActive = false, setDemoAct
         if (!demoActiveRef.current) return;
         const tid = `demo-${Date.now()}-${i}`;
         setToasts(prev => [...prev, { ...event, _tid: tid, detected_at: new Date().toISOString(), _exiting: false }].slice(-5));
+        onDemoAlert?.(event);
         setTimeout(() => {
           setToasts(prev => prev.map(t => t._tid === tid ? { ...t, _exiting: true } : t));
           setTimeout(() => setToasts(prev => prev.filter(t => t._tid !== tid)), 400);
@@ -258,7 +264,8 @@ export default function FleetMap({ buses, alerts, demoActive = false, setDemoAct
       }, i * 5000 + 800);
     });
 
-    setTimeout(() => {
+    autoStopRef.current = setTimeout(() => {
+      autoStopRef.current = null;
       demoActiveRef.current = false;
       setDemoActive(false);
     }, DEMO_EVENTS.length * 5000 + 2000);

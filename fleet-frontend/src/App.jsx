@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { FleetConfigProvider, useFleetConfig } from './contexts/FleetConfigContext';
 import Layout from './components/Layout';
@@ -112,6 +112,26 @@ function AppShell() {
     if (fresh.length > 0) setWsAccum(prev => [...fresh, ...prev]);
   }, [alerts, demoActive]);
 
+  // Called by FleetMap when a DEMO_EVENT toast fires — mirrors it into Alert Center
+  const pushDemoAlert = useCallback((event) => {
+    const ts = new Date().toISOString();
+    const key = `demo-${(event.message ?? '').slice(0, 40).replace(/\s+/g, '-').toLowerCase()}`;
+    if (wsSeenRef.current.has(key)) return;
+    wsSeenRef.current.add(key);
+    setWsAccum(prev => [{
+      id:          key,
+      _wsOnly:     true,
+      bus_id:      event.busId   ?? null,
+      route_no:    event.routeNo ?? null,
+      driver_name: null,
+      message:     event.message || 'Demo Alert',
+      severity:    event.severity ?? 'medium',
+      status:      'new',
+      detected_at: ts,
+      timeline:    [{ by: 'System', note: event.message || 'Demo Alert', ts, type: 'system' }],
+    }, ...prev]);
+  }, []);
+
   if (loading || (user && !profile)) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -146,6 +166,7 @@ function AppShell() {
         fetchArrivals={telemetry.fetchArrivals}
         demoActive={demoActive}
         setDemoActive={setDemoActive}
+        onDemoAlert={pushDemoAlert}
       />
     </Layout>
   );
