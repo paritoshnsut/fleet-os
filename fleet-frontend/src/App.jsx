@@ -6,7 +6,7 @@ import LoginPage from './pages/LoginPage';
 import OnboardingWizard from './pages/OnboardingWizard';
 import { useTelemetry } from './hooks/useTelemetry';
 import { useAlerts } from './hooks/useAlerts';
-import { syncFleetToBackend } from './lib/syncFleet';
+
 
 import FleetMap      from './pages/FleetMap';
 import FleetDrivers  from './pages/FleetDrivers';
@@ -60,7 +60,7 @@ const ROLE_HOME = {
 
 function AppShell() {
   const { user, profile, loading, isOnboarded, isDemoMode } = useAuth();
-  const { buses, alerts, connected, ...telemetry } = useTelemetry();
+  const { buses, alerts, connected, ...telemetry } = useTelemetry(user?.id);
   const { updateConfig } = useFleetConfig();
 
   // Single demo-active flag — lifted here so all alert pipelines gate on the same source
@@ -71,15 +71,10 @@ function AppShell() {
   const defaultPage = profile ? (ROLE_HOME[profile.role] ?? 'fleet-map') : 'fleet-map';
   const [activePage, setActivePage] = useState(defaultPage);
 
-  // Sync Fleet Setup buses/drivers to the backend simulator once on login
-  // and update the deployed bus count in the Control Center config
+  // Update deployed bus count in Control Center config once buses arrive from telemetry
   useEffect(() => {
-    if (user) {
-      syncFleetToBackend(user.id).then(count => {
-        if (count > 0) updateConfig({ deployedBusCount: count });
-      });
-    }
-  }, [user?.id]);
+    if (buses.length > 0) updateConfig({ deployedBusCount: buses.length });
+  }, [buses.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // When profile loads for a given user, jump to that role's home page.
   // Track user.id so switching accounts always resets to the correct tab.

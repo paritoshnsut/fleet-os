@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { syncFleetToBackend } from '../lib/syncFleet';
 
 const WS_URL  = import.meta.env.VITE_WS_URL  || 'ws://localhost:4000';
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
 
-export function useTelemetry() {
+export function useTelemetry(operatorId) {
   const [buses,   setBuses]   = useState([]);
   const [alerts,  setAlerts]  = useState([]);
   const [connected, setConnected] = useState(false);
@@ -18,38 +19,52 @@ export function useTelemetry() {
   }, []);
 
   useEffect(() => {
-    function connect() {
-      const ws = new WebSocket(WS_URL);
-      wsRef.current = ws;
+    if (!operatorId) return;
 
-      ws.onopen = () => {
-        setConnected(true);
-        console.log('WebSocket connected');
-      };
+    let cancelled = false;
 
-      ws.onmessage = (e) => {
-        const data = JSON.parse(e.data);
-        if (data.type === 'telemetry') {
-          setBuses(data.buses);
-          // Extract alerts from telemetry
-          data.buses.forEach(bus => {
-            if (bus.lastAlert) pushAlert({ ...bus.lastAlert, busId: bus.busId, routeNo: bus.routeNo });
-          });
-        }
-      };
+    async function startTelemetry() {
+      // Sync fleet to backend first so the first WS broadcast has the correct buses
+      await syncFleetToBackend(operatorId);
+      if (cancelled) return;
 
-      ws.onclose = () => {
-        setConnected(false);
-        // Reconnect after 2s
-        setTimeout(connect, 2000);
-      };
+      function connect() {
+        const ws = new WebSocket(WS_URL);
+        wsRef.current = ws;
 
-      ws.onerror = () => ws.close();
+        ws.onopen = () => {
+          setConnected(true);
+          console.log('WebSocket connected');
+        };
+
+        ws.onmessage = (e) => {
+          const data = JSON.parse(e.data);
+          if (data.type === 'telemetry') {
+            setBuses(data.buses);
+            data.buses.forEach(bus => {
+              if (bus.lastAlert) pushAlert({ ...bus.lastAlert, busId: bus.busId, routeNo: bus.routeNo });
+            });
+          }
+        };
+
+        ws.onclose = () => {
+          setConnected(false);
+          if (!cancelled) setTimeout(connect, 2000);
+        };
+
+        ws.onerror = () => ws.close();
+      }
+
+      connect();
     }
 
-    connect();
-    return () => wsRef.current?.close();
-  }, [pushAlert]);
+    startTelemetry();
+
+    return () => {
+      cancelled = true;
+      wsRef.current?.close();
+    };
+  }, [operatorId, pushAlert]);
 
   // REST helpers
   const fetchDrivers = useCallback(() =>
